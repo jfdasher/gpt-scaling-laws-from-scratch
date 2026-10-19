@@ -1,0 +1,192 @@
+{
+  "planPath": "docs/superpowers/plans/2026-10-19-gpt-scaling-laws.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: Project scaffold",
+      "status": "pending",
+      "description": "**Goal:** A uv project with an importable `gptlab` package, empty `analysis` package, a running pytest suite, and git hygiene.\n\n**Files:**\n- Create: `pyproject.toml`, `.gitignore`, `gptlab/__init__.py`, `analysis/__init__.py`, `tests/__init__.py`, `tests/test_smoke.py`, `NOTES.md`\n\n**Acceptance Criteria:**\n- [ ] `uv sync` succeeds; torch comes from the CPU wheel index locally\n- [ ] `uv run pytest -q` reports `1 passed`\n- [ ] `.gitignore` excludes `.venv/`, `__pycache__/`, `wandb/`, `*.bin`, `*.pt`, `/export/`\n\n**Verify:** `uv sync && uv run pytest -q` → `1 passed`\n\n```json:metadata\n{\"files\": [\"pyproject.toml\", \"gptlab/__init__.py\", \"analysis/__init__.py\", \"tests/__init__.py\", \"tests/test_smoke.py\", \"NOTES.md\"], \"verifyCommand\": \"uv sync && uv run pytest -q\", \"acceptanceCriteria\": [\"`uv sync` succeeds; torch comes from the CPU wheel index locally\", \"`uv run pytest -q` reports `1 passed`\", \"`.gitignore` excludes `.venv/`, `__pycache__/`, `wandb/`, `*.bin`, `*.pt`, `/export/`\"], \"modelTier\": \"mechanical\"}\n```",
+      "nativeId": 6
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Sizing math and LR schedule",
+      "status": "pending",
+      "description": "**Goal:** Pure functions that turn (budget, tokens/param) into an exact model shape and step count, plus the warmup + cosine LR schedule.\n\n**Files:**\n- Create: `gptlab/flops.py`, `gptlab/schedule.py`, `tests/test_flops.py`, `tests/test_schedule.py`\n\n**Acceptance Criteria:**\n- [ ] `param_count` implements L·(4d² + 3dh + 2d) + d + V·d (+2·HEAD_DIM per layer with qk_norm)\n- [ ] `choose_shape` lands within 20% of the target N for targets from 2e6 to 1e8, with d/L in [16, 64]\n- [ ] `size_for_budget` gives flops within 1% of the budget, and 5 distinct shapes per grid budget\n- [ ] `lr_at` gives peak/warmup at step 0, peak at the end of warmup, and approaches `final_frac·peak` at the last step; with warmup_frac=0, step 0 = peak\n\n**Verify:** `uv run pytest -q tests/test_flops.py tests/test_schedule.py` → all pass\n\n```json:metadata\n{\"files\": [\"gptlab/flops.py\", \"gptlab/schedule.py\", \"tests/test_flops.py\", \"tests/test_schedule.py\"], \"verifyCommand\": \"uv run pytest -q tests/test_flops.py tests/test_schedule.py\", \"acceptanceCriteria\": [\"`param_count` implements L·(4d² + 3dh + 2d) + d + V·d (+2·HEAD_DIM per layer with qk_norm)\", \"`choose_shape` lands within 20% of the target N for targets from 2e6 to 1e8, with d/L in [16, 64]\", \"`size_for_budget` gives flops within 1% of the budget, and 5 distinct shapes per grid budget\", \"`lr_at` gives peak/warmup at step 0, peak at the end of warmup, and approaches `final_frac·peak` at the last step; with warmup_frac=0, step 0 = peak\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        1
+      ],
+      "nativeId": 7
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: Llama-style GPT model",
+      "status": "pending",
+      "description": "**Goal:** The model, with module names that mirror HF Llama, optional QK-norm and z-loss, per-layer attention max-logit stats, and sampling.\n\n**Files:**\n- Create: `gptlab/model.py`, `tests/test_model.py`\n\n**Acceptance Criteria:**\n- [ ] `GPT.num_params()` equals `param_count(...)` for several shapes, with and without qk_norm\n- [ ] Causal: changing token j leaves logits at positions < j unchanged\n- [ ] `rotate_half([1,2,3,4]) == [-3,-4,1,2]`\n- [ ] A tiny model overfits one batch (loss < 0.05 within 300 Adam steps)\n- [ ] `loss_fn` with z_loss > 0 returns total > ce; with stats, the list has one value per layer\n- [ ] `generate` is deterministic given a seeded generator\n\n**Verify:** `uv run pytest -q tests/test_model.py` → all pass\n\n```json:metadata\n{\"files\": [\"gptlab/model.py\", \"tests/test_model.py\"], \"verifyCommand\": \"uv run pytest -q tests/test_model.py\", \"acceptanceCriteria\": [\"`GPT.num_params()` equals `param_count(...)` for several shapes, with and without qk_norm\", \"Causal: changing token j leaves logits at positions < j unchanged\", \"`rotate_half([1,2,3,4]) == [-3,-4,1,2]`\", \"A tiny model overfits one batch (loss < 0.05 within 300 Adam steps)\", \"`loss_fn` with z_loss > 0 returns total > ce; with stats, the list has one value per layer\", \"`generate` is deterministic given a seeded generator\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        2
+      ],
+      "nativeId": 8
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: Reference AdamW and attention",
+      "status": "pending",
+      "description": "**Goal:** Readable reference versions of AdamW and causal attention, proven equal to PyTorch's to tolerance. These are interview artefacts, not used in real runs.\n\n**Files:**\n- Create: `gptlab/reference.py`, `tests/test_reference.py`\n\n**Acceptance Criteria:**\n- [ ] `RefAdamW` matches `torch.optim.AdamW` (decay and no-decay groups) over 50 float64 steps to atol 1e-10\n- [ ] `causal_attention` matches `F.scaled_dot_product_attention(is_causal=True)` to atol 1e-5 in fp32\n\n**Verify:** `uv run pytest -q tests/test_reference.py` → 2 passed\n\n```json:metadata\n{\"files\": [\"gptlab/reference.py\", \"tests/test_reference.py\"], \"verifyCommand\": \"uv run pytest -q tests/test_reference.py\", \"acceptanceCriteria\": [\"`RefAdamW` matches `torch.optim.AdamW` (decay and no-decay groups) over 50 float64 steps to atol 1e-10\", \"`causal_attention` matches `F.scaled_dot_product_attention(is_causal=True)` to atol 1e-5 in fp32\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        1
+      ],
+      "nativeId": 9
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: Data stream, manifest, bpb",
+      "status": "pending",
+      "description": "**Goal:** Deterministic sequential reads of a uint16 token file (step k always maps to the same slice), val iteration, a val manifest that freezes the split, and the bpb conversion.\n\n**Files:**\n- Create: `gptlab/data.py`, `tests/test_data.py`\n\n**Acceptance Criteria:**\n- [ ] `TokenStream.get(i)` returns `(x, y)` with y = x shifted by one, from `offset + i·B·T`; going past the end raises `DataExhausted`\n- [ ] Step k's slice is independent of micro-batch size (same tokens for micro_batch 2×accum 2 and micro_batch 4×accum 1)\n- [ ] `val_batches` covers every val position except the last, with no overlap; it honours `max_tokens`\n- [ ] `verify_manifest` passes on an untouched dir and raises `ManifestMismatch` after `val.bin` or `tokenizer.json` changes\n- [ ] `bits_per_byte(loss, n_tokens, n_bytes) == loss/ln2 · n_tokens/n_bytes`\n\n**Verify:** `uv run pytest -q tests/test_data.py` → all pass\n\n```json:metadata\n{\"files\": [\"gptlab/data.py\", \"tests/test_data.py\"], \"verifyCommand\": \"uv run pytest -q tests/test_data.py\", \"acceptanceCriteria\": [\"`TokenStream.get(i)` returns `(x, y)` with y = x shifted by one, from `offset + i·B·T`; going past the end raises `DataExhausted`\", \"Step k's slice is independent of micro-batch size (same tokens for micro_batch 2×accum 2 and micro_batch 4×accum 1)\", \"`val_batches` covers every val position except the last, with no overlap; it honours `max_tokens`\", \"`verify_manifest` passes on an untouched dir and raises `ManifestMismatch` after `val.bin` or `tokenizer.json` changes\", \"`bits_per_byte(loss, n_tokens, n_bytes) == loss/ln2 · n_tokens/n_bytes`\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        1
+      ],
+      "nativeId": 10
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Split rule, tokenizer, shard assembly",
+      "status": "pending",
+      "description": "**Goal:** The pure-Python data-prep logic that Modal containers call. It covers the document-hash split, 8k BPE training, per-file encoding with a seeded shuffle, train shard concatenation, and the merge of the sorted val docs.\n\n**Files:**\n- Create: `gptlab/tokenizer.py`, `tests/test_tokenizer.py`\n\n**Acceptance Criteria:**\n- [ ] `is_val_doc` is deterministic, and the val rate on 200k synthetic IDs is within 0.4–0.6%\n- [ ] The tokenizer trained on a toy corpus has `<|endoftext|>` at id 0; encode → decode roundtrips Unicode, code and whitespace runs\n- [ ] `encode_file_docs` puts no val doc into train; train EOT count == number of train docs; val docs are sorted by id; the same seed gives the same order\n- [ ] `concat_shards` writes whole shards in seeded order until it reaches ≥ min_tokens, and raises `InsufficientData` otherwise\n- [ ] `merge_val_shards` gathers whole docs in global id order until it reaches ≥ min_tokens, and returns (docs, tokens, bytes)\n\n**Verify:** `uv run pytest -q tests/test_tokenizer.py` → all pass\n\n```json:metadata\n{\"files\": [\"gptlab/tokenizer.py\", \"tests/test_tokenizer.py\"], \"verifyCommand\": \"uv run pytest -q tests/test_tokenizer.py\", \"acceptanceCriteria\": [\"`is_val_doc` is deterministic, and the val rate on 200k synthetic IDs is within 0.4–0.6%\", \"The tokenizer trained on a toy corpus has `<|endoftext|>` at id 0; encode → decode roundtrips Unicode, code and whitespace runs\", \"`encode_file_docs` puts no val doc into train; train EOT count == number of train docs; val docs are sorted by id; the same seed gives the same order\", \"`concat_shards` writes whole shards in seeded order until it reaches ≥ min_tokens, and raises `InsufficientData` otherwise\", \"`merge_val_shards` gathers whole docs in global id order until it reaches ≥ min_tokens, and returns (docs, tokens, bytes)\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        2,
+        5
+      ],
+      "nativeId": 11
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Baselines",
+      "status": "pending",
+      "description": "**Goal:** The numbers to beat, measured before any training: uniform, unigram, an interpolated bigram (fit on train, evaluated on val), and a GPT-2-small bits-per-byte reference.\n\n**Files:**\n- Create: `gptlab/baselines.py`, `tests/test_baselines.py`\n\n**Acceptance Criteria:**\n- [ ] On a deterministic cyclic sequence: bigram CE < unigram CE ≤ uniform + 1e-6\n- [ ] Chunked `bigram_counts` equals the naive count\n- [ ] `tune_lambda` picks the λ that minimizes held-out CE on the grid\n- [ ] `decode_docs` splits on EOT and roundtrips the texts\n- [ ] `compute_baselines(data_dir, device, include_gpt2=False)` returns uniform/unigram/bigram, each with `loss_nats` and `bpb`\n\n**Verify:** `uv run pytest -q tests/test_baselines.py` → all pass\n\n```json:metadata\n{\"files\": [\"gptlab/baselines.py\", \"tests/test_baselines.py\"], \"verifyCommand\": \"uv run pytest -q tests/test_baselines.py\", \"acceptanceCriteria\": [\"On a deterministic cyclic sequence: bigram CE < unigram CE ≤ uniform + 1e-6\", \"Chunked `bigram_counts` equals the naive count\", \"`tune_lambda` picks the λ that minimizes held-out CE on the grid\", \"`decode_docs` splits on EOT and roundtrips the texts\", \"`compute_baselines(data_dir, device, include_gpt2=False)` returns uniform/unigram/bigram, each with `loss_nats` and `bpb`\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        6
+      ],
+      "nativeId": 12
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: Training loop with checkpoint/resume",
+      "status": "pending",
+      "description": "**Goal:** `train(cfg, run_dir, data_dir, ...)` is the whole training step: bf16 autocast, gradient accumulation, clipping, the schedule, and fused AdamW. Around it: evals, per-layer stats, samples, atomic checkpoints, exact resume, loud NaN failure with forensics, and `result.json`. Also `benchmark()` for throughput.\n\n**Files:**\n- Create: `gptlab/train.py`, `tests/test_train.py`\n\n**Acceptance Criteria:**\n- [ ] `run_id` ignores `name`/`phase`/`budget_flops`/`tokens_per_param` and changes with `seed`\n- [ ] Resume is exact: 20 straight steps produce the same per-step losses (`losses.jsonl`) and final val loss as 10 steps + `SimulatedPreemption` + resume + 10 steps (CPU fp32, compile off)\n- [ ] Loss falls by more than 1.0 nat over 80 steps on the learnable synthetic stream\n- [ ] A NaN loss writes `forensic.json` (step, loss, token span, gpu_seconds) and `FAILED`, then raises `NonFiniteLoss`; calling again raises `RunFailed`\n- [ ] An existing `result.json` short-circuits (returns it, adds no new loss lines)\n- [ ] A tampered `val.bin` raises `ManifestMismatch` before training\n- [ ] `result.json` has every field listed in spec §3 (run_id, n_params, n_params_nonembed, tokens, flops, val_loss, val_bpb, gpu_seconds, gpu_hours, cost_usd, wandb_url, git_commit, …)\n\n**Verify:** `uv run pytest -q tests/test_train.py` → all pass\n\n```json:metadata\n{\"files\": [\"gptlab/train.py\", \"tests/test_train.py\"], \"verifyCommand\": \"uv run pytest -q tests/test_train.py\", \"acceptanceCriteria\": [\"`run_id` ignores `name`/`phase`/`budget_flops`/`tokens_per_param` and changes with `seed`\", \"Resume is exact: 20 straight steps produce the same per-step losses (`losses.jsonl`) and final val loss as 10 steps + `SimulatedPreemption` + resume + 10 steps (CPU fp32, compile off)\", \"Loss falls by more than 1.0 nat over 80 steps on the learnable synthetic stream\", \"A NaN loss writes `forensic.json` (step, loss, token span, gpu_seconds) and `FAILED`, then raises `NonFiniteLoss`; calling again raises `RunFailed`\", \"An existing `result.json` short-circuits (returns it, adds no new loss lines)\", \"A tampered `val.bin` raises `ManifestMismatch` before training\", \"`result.json` has every field listed in spec §3 (run_id, n_params, n_params_nonembed, tokens, flops, val_loss, val_bpb, gpu_seconds, gpu_hours, cost_usd, wandb_url, git_commit, …)\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        2,
+        3,
+        5
+      ],
+      "nativeId": 13
+    },
+    {
+      "id": 9,
+      "subject": "Task 9: Sweep grids, LR rule, cost dry-run",
+      "status": "pending",
+      "description": "**Goal:** Every phase's run configs are generated from code. The LR rule is fitted from the sweep, and a dry-run planner prints runs, skips and the dollar estimate. Nothing in this module launches anything.\n\n**Files:**\n- Create: `sweep.py`, `tests/test_sweep.py`\n\n**Acceptance Criteria:**\n- [ ] `grid_configs(rule)` = 25 configs: 20 seed-0 plus 5 seed-1 at 3e15 with `data_offset=1_000_000_000`; unique run_ids\n- [ ] `lr_configs()` = 13 configs with LRs ×2 apart around each centre\n- [ ] `dynamics_configs(rule)` = 12 configs; `dyn/baseline` has the same run_id as `grid/3e16/r20`; batch variants keep tokens within one batch of each other\n- [ ] `dynamics_fix_configs(rule, name)` gives `+qknorm` and `+zloss` variants of the named config\n- [ ] `best_lrs` treats missing (failed) runs as +inf loss and flags edge optima; `fit_lr_rule` is the exact line through the two sweep ends, and it reports the check-point ratio\n- [ ] `declared_test_config(n_opt, rule)` has flops within 1% of 3e17\n- [ ] `python sweep.py plan grid --lr-rule <file>` prints the table and totals without importing modal\n\n**Verify:** `uv run pytest -q tests/test_sweep.py` → all pass\n\n```json:metadata\n{\"files\": [\"sweep.py\", \"tests/test_sweep.py\"], \"verifyCommand\": \"uv run pytest -q tests/test_sweep.py\", \"acceptanceCriteria\": [\"`grid_configs(rule)` = 25 configs: 20 seed-0 plus 5 seed-1 at 3e15 with `data_offset=1_000_000_000`; unique run_ids\", \"`lr_configs()` = 13 configs with LRs ×2 apart around each centre\", \"`dynamics_configs(rule)` = 12 configs; `dyn/baseline` has the same run_id as `grid/3e16/r20`; batch variants keep tokens within one batch of each other\", \"`dynamics_fix_configs(rule, name)` gives `+qknorm` and `+zloss` variants of the named config\", \"`best_lrs` treats missing (failed) runs as +inf loss and flags edge optima; `fit_lr_rule` is the exact line through the two sweep ends, and it reports the check-point ratio\", \"`declared_test_config(n_opt, rule)` has flops within 1% of 3e17\", \"`python sweep.py plan grid --lr-rule <file>` prints the table and totals without importing modal\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        8
+      ],
+      "nativeId": 14
+    },
+    {
+      "id": 10,
+      "subject": "Task 10: Modal app",
+      "status": "pending",
+      "description": "**Goal:** All the Modal wiring in one file: volumes, image and secrets; data prep (tokenizer, `.map()` encoding, finalize and manifest); baselines; throughput bench; `train_one`/`train_long` with retries, timeouts and a concurrency cap; result collection; and HF push. Phase entrypoints refuse to launch without `--yes`.\n\n**Files:**\n- Create: `modal_app.py`\n\n**Acceptance Criteria:**\n- [ ] `uv run python -c \"import modal_app\"` succeeds (app definition is valid)\n- [ ] `grep -rl \"^import modal\\|^from modal\" --include=*.py .` lists only `modal_app.py`\n- [ ] Every GPU function sets `gpu=\"H100\"` and an explicit `timeout`; train functions have `retries=modal.Retries(max_retries=3, ...)` and `max_containers=10`\n- [ ] `launch` prints the plan and returns without spawning anything unless `--yes`\n- [ ] The HF cache, data, checkpoint and inductor cache each live on a `modal.Volume`\n\n**Verify:** `uv run python -c \"import modal_app; print('ok')\"` → `ok`; `grep -rl \"^import modal\\|^from modal\" --include=*.py . | grep -v .venv` → `./modal_app.py`\n\n```json:metadata\n{\"files\": [\"modal_app.py\"], \"verifyCommand\": \"uv run python -c \\\"import modal_app; print('ok')\\\"\", \"acceptanceCriteria\": [\"`uv run python -c \\\"import modal_app\\\"` succeeds (app definition is valid)\", \"`grep -rl \\\"^import modal\\\\|^from modal\\\" --include=*.py .` lists only `modal_app.py`\", \"Every GPU function sets `gpu=\\\"H100\\\"` and an explicit `timeout`; train functions have `retries=modal.Retries(max_retries=3, ...)` and `max_containers=10`\", \"`launch` prints the plan and returns without spawning anything unless `--yes`\", \"The HF cache, data, checkpoint and inductor cache each live on a `modal.Volume`\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        6,
+        7,
+        8,
+        9
+      ],
+      "nativeId": 15
+    },
+    {
+      "id": 11,
+      "subject": "Task 11: Scaling-law fits, prediction, costs",
+      "status": "pending",
+      "description": "**Goal:** Offline fits from `results/`: isoflop parabolas with bootstrap, power laws, the parametric L(N, D) fit with bootstrap, the pre-registered prediction file with comparison, and the cost ledger. Each is validated on synthetic data with known exponents.\n\n**Files:**\n- Create: `analysis/common.py`, `analysis/isoflop.py`, `analysis/parametric.py`, `analysis/predict.py`, `analysis/costs.py`, `tests/test_fits.py`\n\n**Acceptance Criteria:**\n- [ ] On a synthetic Chinchilla law (E=1.69, A=406.4, B=410.7, α=0.34, β=0.28; N_opt ≈ 5.8M at 3e15, inside the grid) sampled on our grid, the isoflop `a` is within 0.05 of β/(α+β)=0.452, and every vertex is interior\n- [ ] On the same synthetic data, the parametric fit recovers α and β within 0.03 and E within 0.05\n- [ ] `seed_sigma` = sqrt(mean(diff²)/2) over the seed pairs\n- [ ] `make_prediction` returns isoflop and parametric N_opt with intervals, `declared_config`, and predicted loss for the declared (N, D); the CLI refuses to overwrite an existing prediction file without `--force`\n- [ ] `compare` reports the actual loss, the signed error and an `inside_interval` flag for each method\n- [ ] `cost_line(r) == \"this run: 2.10 GPU-hours, $8.30\"` for gpu_hours=2.1, cost_usd=8.296; phase totals include failed runs' GPU time\n\n**Verify:** `uv run pytest -q tests/test_fits.py` → all pass\n\n```json:metadata\n{\"files\": [\"analysis/common.py\", \"analysis/isoflop.py\", \"analysis/parametric.py\", \"analysis/predict.py\", \"analysis/costs.py\", \"tests/test_fits.py\"], \"verifyCommand\": \"uv run pytest -q tests/test_fits.py\", \"acceptanceCriteria\": [\"On a synthetic Chinchilla law (E=1.69, A=406.4, B=410.7, α=0.34, β=0.28; N_opt ≈ 5.8M at 3e15, inside the grid) sampled on our grid, the isoflop `a` is within 0.05 of β/(α+β)=0.452, and every vertex is interior\", \"On the same synthetic data, the parametric fit recovers α and β within 0.03 and E within 0.05\", \"`seed_sigma` = sqrt(mean(diff²)/2) over the seed pairs\", \"`make_prediction` returns isoflop and parametric N_opt with intervals, `declared_config`, and predicted loss for the declared (N, D); the CLI refuses to overwrite an existing prediction file without `--force`\", \"`compare` reports the actual loss, the signed error and an `inside_interval` flag for each method\", \"`cost_line(r) == \\\"this run: 2.10 GPU-hours, $8.30\\\"` for gpu_hours=2.1, cost_usd=8.296; phase totals include failed runs' GPU time\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        9
+      ],
+      "nativeId": 16
+    },
+    {
+      "id": 12,
+      "subject": "Task 12: Figures and HF export",
+      "status": "pending",
+      "description": "**Goal:** Every figure in spec §7.1, and the Llama-format export with a model card, proven logit-equivalent to `gptlab.GPT`.\n\n**Files:**\n- Create: `analysis/plots.py`, `analysis/export_hf.py`, `tests/test_plots.py`, `tests/test_export.py`\n\n**Acceptance Criteria:**\n- [ ] `to_llama(GPT)` logits match `GPT` logits to atol 1e-4 (fp32, random init, 2 layers, d=128)\n- [ ] `to_llama` refuses a model with `qk_norm=True`\n- [ ] `model_card(...)` contains YAML front matter with `license: apache-2.0` and `HuggingFaceFW/fineweb-edu`, the cost line, N_total and N_nonembed, tokens, val loss and bpb, and the samples\n- [ ] Every plot function writes a non-empty PNG from synthetic inputs (Agg backend)\n\n**Verify:** `uv run pytest -q tests/test_plots.py tests/test_export.py` → all pass\n\n```json:metadata\n{\"files\": [\"analysis/plots.py\", \"analysis/export_hf.py\", \"tests/test_plots.py\", \"tests/test_export.py\"], \"verifyCommand\": \"uv run pytest -q tests/test_plots.py tests/test_export.py\", \"acceptanceCriteria\": [\"`to_llama(GPT)` logits match `GPT` logits to atol 1e-4 (fp32, random init, 2 layers, d=128)\", \"`to_llama` refuses a model with `qk_norm=True`\", \"`model_card(...)` contains YAML front matter with `license: apache-2.0` and `HuggingFaceFW/fineweb-edu`, the cost line, N_total and N_nonembed, tokens, val loss and bpb, and the samples\", \"Every plot function writes a non-empty PNG from synthetic inputs (Agg backend)\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        3,
+        11
+      ],
+      "nativeId": 17
+    },
+    {
+      "id": 13,
+      "subject": "Task 13: Phase 0-1: setup, data, baselines, smoke",
+      "status": "pending",
+      "description": "**Goal:** Set the spend limit and secrets, freeze the val split, train the tokenizer, encode the data, commit the manifest and baselines, prove preemption-resume on an H100, and record throughput per shape.\n\n> **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- Create (outputs): `data/val_manifest.json`, `baselines.json`, `bench.json`\n- Modify: `NOTES.md`\n\n**Acceptance Criteria:**\n- [ ] The user confirms in chat that the Modal workspace spend limit is set to $60 **before** any GPU function runs\n- [ ] `modal secret list` shows `wandb` and `huggingface`\n- [ ] `data/val_manifest.json` is committed with `n_tokens ≥ 10,000,000`, `train_tokens ≥ 2,200,000,000` and `val_per_mille: 5`, and it's identical to `/vol/data/val_manifest.json`\n- [ ] `baselines.json` is committed before any training run, and bigram loss < unigram loss < uniform loss (9.011)\n- [ ] Smoke: `results/` holds `smoke/a` and `smoke/preempt`; the preempt run's curve has every step 0–199 exactly once; max |loss_preempt − loss_a| over steps 100–199 is < 0.05; there's one W&B run per smoke config\n- [ ] `bench.json` has 4 rows with `tokens_per_s` and `mfu`; `python sweep.py plan grid` uses it\n\n**Verify:** `uv run modal run modal_app.py::pull_results`, then the Task 13 Step 6 check script in the plan → prints `SMOKE OK max diff …`\n\n```json:metadata\n{\"files\": [\"data/val_manifest.json\", \"baselines.json\", \"bench.json\", \"NOTES.md\"], \"verifyCommand\": \"uv run modal run modal_app.py::pull_results && (plan Task 13 Step 6 heredoc script) -> 'SMOKE OK'\", \"acceptanceCriteria\": [\"The user confirms in chat that the Modal workspace spend limit is set to $60 **before** any GPU function runs\", \"`modal secret list` shows `wandb` and `huggingface`\", \"`data/val_manifest.json` is committed with `n_tokens ≥ 10,000,000`, `train_tokens ≥ 2,200,000,000` and `val_per_mille: 5`, and it's identical to `/vol/data/val_manifest.json`\", \"`baselines.json` is committed before any training run, and bigram loss < unigram loss < uniform loss (9.011)\", \"Smoke: `results/` holds `smoke/a` and `smoke/preempt`; the preempt run's curve has every step 0–199 exactly once; max |loss_preempt − loss_a| over steps 100–199 is < 0.05; there's one W&B run per smoke config\", \"`bench.json` has 4 rows with `tokens_per_s` and `mfu`; `python sweep.py plan grid` uses it\"], \"modelTier\": \"standard\", \"userGate\": true, \"tags\": [\"user-gate\"]}\n```",
+      "blockedBy": [
+        10,
+        11,
+        12
+      ],
+      "nativeId": 18
+    },
+    {
+      "id": 14,
+      "subject": "Task 14: Phase 2: LR sweep and rule",
+      "status": "pending",
+      "description": "**Goal:** Sweep peak LR at the small and large ends (plus a mid check), confirm each optimum is interior, and commit `lr_rule.json`.\n\n> **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- Create (outputs): `lr_rule.json`, `results/*.json`, `figures/lr_sweep.png`\n- Modify: `sweep.py` (`LR_SWEEP` centres, only if an optimum lands on an edge), `NOTES.md`\n\n**Acceptance Criteria:**\n- [ ] The user approves the printed dry-run plan and cost before `--yes`\n- [ ] `sweep.py fit-lr-rule` prints `ok` (interior) for all three groups\n- [ ] `check_ratio` for the 9M group is within 0.5–2.0, or the deviation is written up in `NOTES.md` and the user accepts it\n- [ ] `lr_rule.json` and `figures/lr_sweep.png` are committed\n\n**Verify:** `uv run python sweep.py fit-lr-rule --results results` → three `ok` lines and `check ratio` within 0.5–2\n\n```json:metadata\n{\"files\": [\"lr_rule.json\", \"results/*.json\", \"figures/lr_sweep.png\", \"sweep.py\", \"NOTES.md\"], \"verifyCommand\": \"uv run python sweep.py fit-lr-rule --results results\", \"acceptanceCriteria\": [\"The user approves the printed dry-run plan and cost before `--yes`\", \"`sweep.py fit-lr-rule` prints `ok` (interior) for all three groups\", \"`check_ratio` for the 9M group is within 0.5–2.0, or the deviation is written up in `NOTES.md` and the user accepts it\", \"`lr_rule.json` and `figures/lr_sweep.png` are committed\"], \"modelTier\": \"standard\", \"userGate\": true, \"tags\": [\"user-gate\"]}\n```",
+      "blockedBy": [
+        13
+      ],
+      "nativeId": 19
+    },
+    {
+      "id": 15,
+      "subject": "Task 15: Phase 3-4: grid and dynamics track",
+      "status": "pending",
+      "description": "**Goal:** Run the 25-run grid and the dynamics track. Confirm that every budget's minimum is interior, then provoke instability, diagnose it and fix it, with a figure and a written diagnosis for each experiment.\n\n> **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- Create (outputs): `results/…`, `results/fits/isoflop.json`, `figures/dyn_instability.png`, `figures/dyn_warmup.png`, `figures/dyn_beta2.png`, `figures/dyn_batch.png`\n- Modify: `sweep.py` (`GRID_EXTRA_RATIOS`, only if a gate fails), `NOTES.md`\n\n**Acceptance Criteria:**\n- [ ] The user approves the grid and dynamics dry-run costs before `--yes`\n- [ ] All 25 grid runs have results (no FAILED)\n- [ ] `python -m analysis.isoflop results` prints `ok` (interior) for all 4 budgets, after any `GRID_EXTRA_RATIOS` additions\n- [ ] All 12 dynamics runs are accounted for (result or FAILED with forensics); the diverging config is identified, and its `+qknorm` and `+zloss` fixes have been run\n- [ ] Four dynamics figures are committed, and `NOTES.md` has a dated, one-paragraph diagnosis per experiment (instability: which layer's grad norm or attention max-logit blew up first, and at what step)\n\n**Verify:** `uv run python -m analysis.isoflop results` → 4 lines ending `ok`; `ls figures/dyn_*.png | wc -l` → `4`\n\n```json:metadata\n{\"files\": [\"results/fits/isoflop.json\", \"figures/dyn_instability.png\", \"figures/dyn_warmup.png\", \"figures/dyn_beta2.png\", \"figures/dyn_batch.png\", \"sweep.py\", \"NOTES.md\"], \"verifyCommand\": \"uv run python -m analysis.isoflop results\", \"acceptanceCriteria\": [\"The user approves the grid and dynamics dry-run costs before `--yes`\", \"All 25 grid runs have results (no FAILED)\", \"`python -m analysis.isoflop results` prints `ok` (interior) for all 4 budgets, after any `GRID_EXTRA_RATIOS` additions\", \"All 12 dynamics runs are accounted for (result or FAILED with forensics); the diverging config is identified, and its `+qknorm` and `+zloss` fixes have been run\", \"Four dynamics figures are committed, and `NOTES.md` has a dated, one-paragraph diagnosis per experiment (instability: which layer's grad norm or attention max-logit blew up first, and at what step)\"], \"modelTier\": \"frontier\", \"userGate\": true, \"tags\": [\"user-gate\"]}\n```",
+      "blockedBy": [
+        14
+      ],
+      "nativeId": 20
+    },
+    {
+      "id": 16,
+      "subject": "Task 16: Phase 5: fit and pre-register prediction",
+      "status": "pending",
+      "description": "**Goal:** Fit both scaling methods, write the 3e17 prediction (best size, tokens and loss, with intervals) to `predictions/3e17.json`, and commit and tag it **before** anything trains at 3e17.\n\n> **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- Create (outputs): `results/fits/isoflop.json`, `results/fits/parametric.json`, `predictions/3e17.json`, `figures/isoflop.png`, `figures/optima.png`, `figures/frontier.png`, `figures/tokens_per_param.png`, `results/costs.csv`\n- Modify: `NOTES.md`\n\n**Acceptance Criteria:**\n- [ ] `predictions/3e17.json` contains `isoflop.n_opt` with an interval, `parametric.n_opt` with an interval, `declared_config`, and `predicted_loss.parametric` with lo/hi\n- [ ] The prediction is committed and tagged `prediction-3e17`; `git log -1 --format=%cI prediction-3e17` predates any `test` phase result\n- [ ] No `phase == \"test\"` result exists in `results/` at tag time\n- [ ] `NOTES.md` records the isoflop `a` and the parametric `a_implied` side by side; if their intervals don't overlap, that's stated as a finding\n\n**Verify:** `git tag -l prediction-3e17` → `prediction-3e17`; `uv run python -c \"import json;p=json.load(open('predictions/3e17.json'));print(p['declared'],p['predicted_loss'])\"` prints both\n\n```json:metadata\n{\"files\": [\"predictions/3e17.json\", \"results/fits/isoflop.json\", \"results/fits/parametric.json\", \"figures/isoflop.png\", \"figures/optima.png\", \"figures/frontier.png\", \"figures/tokens_per_param.png\", \"results/costs.csv\", \"NOTES.md\"], \"verifyCommand\": \"git tag -l prediction-3e17\", \"acceptanceCriteria\": [\"`predictions/3e17.json` contains `isoflop.n_opt` with an interval, `parametric.n_opt` with an interval, `declared_config`, and `predicted_loss.parametric` with lo/hi\", \"The prediction is committed and tagged `prediction-3e17`; `git log -1 --format=%cI prediction-3e17` predates any `test` phase result\", \"No `phase == \\\"test\\\"` result exists in `results/` at tag time\", \"`NOTES.md` records the isoflop `a` and the parametric `a_implied` side by side; if their intervals don't overlap, that's stated as a finding\"], \"modelTier\": \"frontier\", \"userGate\": true, \"tags\": [\"user-gate\"]}\n```",
+      "blockedBy": [
+        15
+      ],
+      "nativeId": 21
+    },
+    {
+      "id": 17,
+      "subject": "Task 17: Phase 6: 3e17 test run vs prediction",
+      "status": "pending",
+      "description": "**Goal:** Train the declared 3e17 model and report how far the actual loss falls from each prediction.\n\n> **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- Create (outputs): `predictions/3e17_outcome.json`, `results/…`, updated figures\n- Modify: `NOTES.md`\n\n**Acceptance Criteria:**\n- [ ] The tag `prediction-3e17` exists before launch, and the run's config equals `declared_config` (same run_id)\n- [ ] The user approves the dry-run cost before `--yes`\n- [ ] The test run finishes with a result (on `train_long`, 6h timeout)\n- [ ] `predictions/3e17_outcome.json` reports the actual loss, the error against each method, and `inside_interval` for the parametric method\n- [ ] `figures/optima.png` and `figures/frontier.png` show both the predicted and the actual point\n\n**Verify:** `cat predictions/3e17_outcome.json` shows `actual_val_loss` and per-method `error`\n\n```json:metadata\n{\"files\": [\"predictions/3e17_outcome.json\", \"NOTES.md\"], \"verifyCommand\": \"cat predictions/3e17_outcome.json\", \"acceptanceCriteria\": [\"The tag `prediction-3e17` exists before launch, and the run's config equals `declared_config` (same run_id)\", \"The user approves the dry-run cost before `--yes`\", \"The test run finishes with a result (on `train_long`, 6h timeout)\", \"`predictions/3e17_outcome.json` reports the actual loss, the error against each method, and `inside_interval` for the parametric method\", \"`figures/optima.png` and `figures/frontier.png` show both the predicted and the actual point\"], \"modelTier\": \"standard\", \"userGate\": true, \"tags\": [\"user-gate\"]}\n```",
+      "blockedBy": [
+        16
+      ],
+      "nativeId": 22
+    },
+    {
+      "id": 18,
+      "subject": "Task 18: Phase 7: publish and README",
+      "status": "pending",
+      "description": "**Goal:** Push the models with model cards, get the W&B report public, and write the README with every section in spec §9.2, including the cost lines and \"What didn't work\".\n\n> **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- Create: `README.md`\n- Modify: `NOTES.md`\n\n**Acceptance Criteria:**\n- [ ] The user picks the HF namespace/repo names and approves making each repo public (pushes are private until then)\n- [ ] 5 models pushed: the 3e17 model, plus the grid model nearest N_opt at each of the 4 budgets. Each loads with `AutoModelForCausalLM.from_pretrained(repo)` and generates text\n- [ ] Each model card contains its cost line\n- [ ] The README has these sections, in order: TL;DR (a, b, tokens/param, prediction vs actual, total cost) · What happens in a training step (links to `gptlab/train.py` lines) · Data and evaluation protocol plus the baselines table · Method · Scaling results (both methods, disagreement, prediction test) · Training dynamics · What didn't work (from `NOTES.md`) · Cost (per-phase table plus per-run lines) · Reproduce · Limitations and next steps (WSD, μP, more budgets and seeds)\n- [ ] The W&B report URL is in the README, and the user confirms the report is public\n\n**Verify:** `grep -c \"this run:\" README.md` ≥ 5; `uv run python -c \"from transformers import AutoModelForCausalLM as M; M.from_pretrained('<repo>')\"` succeeds for each repo\n\n```json:metadata\n{\"files\": [\"README.md\", \"NOTES.md\"], \"verifyCommand\": \"grep -c \\\"this run:\\\" README.md\", \"acceptanceCriteria\": [\"The user picks the HF namespace/repo names and approves making each repo public (pushes are private until then)\", \"5 models pushed: the 3e17 model, plus the grid model nearest N_opt at each of the 4 budgets. Each loads with `AutoModelForCausalLM.from_pretrained(repo)` and generates text\", \"Each model card contains its cost line\", \"The README has these sections, in order: TL;DR (a, b, tokens/param, prediction vs actual, total cost) · What happens in a training step (links to `gptlab/train.py` lines) · Data and evaluation protocol plus the baselines table · Method · Scaling results (both methods, disagreement, prediction test) · Training dynamics · What didn't work (from `NOTES.md`) · Cost (per-phase table plus per-run lines) · Reproduce · Limitations and next steps (WSD, μP, more budgets and seeds)\", \"The W&B report URL is in the README, and the user confirms the report is public\"], \"modelTier\": \"frontier\", \"userGate\": true, \"tags\": [\"user-gate\"]}\n```",
+      "blockedBy": [
+        17
+      ],
+      "nativeId": 23
+    }
+  ],
+  "lastUpdated": "2026-10-19T00:00:00Z"
+}
