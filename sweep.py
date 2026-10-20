@@ -18,7 +18,7 @@ import numpy as np
 from gptlab.flops import BATCH_TOKENS, H100_DOLLARS_PER_HOUR, choose_shape, param_count, size_for_budget
 from gptlab.train import TrainConfig, run_id
 
-PHASES = ("smoke", "lr", "grid", "dynamics", "dynamics-fix", "test")
+PHASES = ("smoke", "lr", "grid", "dynamics", "dynamics-fix", "probe", "test")
 GRID_BUDGETS = (3e15, 1e16, 3e16, 1e17)
 GRID_RATIOS = (5.0, 10.0, 20.0, 40.0, 80.0)
 GRID_EXTRA_RATIOS: dict[float, tuple[float, ...]] = {}  # phase-3 gate, e.g. {1e17: (160.0,)}
@@ -112,6 +112,17 @@ def dynamics_fix_configs(rule, from_run: str) -> list[TrainConfig]:
     ]
 
 
+def probe_configs(rule) -> list[TrainConfig]:
+    """Diagnosis of the 3e15 grid (NOTES.md): same budget/size/LR as grid/3e15/r20, but a 16k-token batch (4x steps)."""
+    s = size_for_budget(3e15, 20.0)
+    lr = lr_for(s.n_params, rule)
+    kw = dict(batch_tokens=16384, micro_batch=32, tag="probe")
+    return [
+        make_config("probe", "probe/3e+15/r20/b16k", 3e15, 20.0, lr, **kw),
+        make_config("probe", "probe/3e+15/r20/b16k/seed1", 3e15, 20.0, lr, seed=1, data_offset=SEED1_OFFSET, **kw),
+    ]
+
+
 def declared_test_config(n_opt: float, rule, budget: float = TEST_BUDGET) -> TrainConfig:
     shape = choose_shape(n_opt)
     n = param_count(shape.n_layer, shape.d_model)
@@ -136,6 +147,8 @@ def configs_for_phase(phase, lr_rule="lr_rule.json", from_run="", prediction="pr
         return dynamics_configs(rule)
     if phase == "dynamics-fix":
         return dynamics_fix_configs(rule, from_run)
+    if phase == "probe":
+        return probe_configs(rule)
     raise ValueError(f"unknown phase {phase!r}; expected one of {PHASES}")
 
 

@@ -24,3 +24,10 @@ Format: `## YYYY-MM-DD — short title`, then what happened, how it was diagnose
 - Rule: ln lr = 8.090 − 0.8285 ln N (lr ∝ N^−0.83). Check point ratio 0.91. Optima are on a ×2 grid, so each is only known to within ~√2.
 - Instability shows up close to the optimum: 9.3M jumps from 3.656 at 6e-3 to 4.391 at 1.2e-2, and 31M from 3.534 at 2e-3 to 4.474 at 8e-3. Useful context for the dynamics track: the "3×" and "10×" LR multiples will be well past this cliff.
 - LR sweep total: 17 runs, ~$2.5.
+
+## 2026-10-20 — The 3e15 budget is broken (diagnosis in progress)
+- Grid: 25/25 runs finished (~$7.30). 1e16/3e16/1e17 look healthy (optima at 32, 30, 19 tokens/param).
+- 3e15 is not: seed-pair noise σ = 0.106 nats (pairs differ by up to 0.26), losses don't form a parabola, and r5 (10M params, 753 steps) ends at 5.08, barely under the bigram baseline (5.19).
+- Evidence: no spikes or late divergence (smoothed loss never rises > 0.08 above its running minimum). Seed curves separate in the first ~10% of training and then run parallel. The final-30% slope dL/d ln(step) is −0.66 to −0.77 for 3e15 r5/r20, against −0.27 to −0.42 elsewhere: these runs end while still falling steeply.
+- Hypothesis: at 3e15 the bigger models get only 750–1,500 optimizer steps at the 64k batch, so final loss measures optimization progress plus a seed-dependent head start, not capacity. That breaks the isoflop assumption.
+- Test: rerun 3e15/r20, both seeds, at a 16k batch (4× steps, same tokens, LR and FLOPs). Prediction: seeds agree to within a few hundredths and loss drops well below 4.24–4.53.
