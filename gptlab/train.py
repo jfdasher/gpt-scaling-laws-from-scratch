@@ -217,10 +217,10 @@ def generate_samples(model: GPT, tokenizer_path: Path, prompts, device: str, max
     return out
 
 
-def _write_forensics(run_dir, model, optimizer, step, stream, accum, loss, lr, gpu_seconds) -> None:
+def _write_forensics(run_dir, model, optimizer, step, stream, accum, loss, lr, gpu_seconds, grad_norm=None) -> None:
     torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "step": step}, run_dir / "forensic.pt")
     span = [stream.span(step * accum)[0], stream.span(step * accum + accum - 1)[1]]
-    info = {"step": step, "loss": repr(loss), "lr": lr, "token_span": span, "gpu_seconds": gpu_seconds}
+    info = {"step": step, "loss": repr(loss), "grad_norm": None if grad_norm is None else repr(grad_norm), "lr": lr, "token_span": span, "gpu_seconds": gpu_seconds}
     (run_dir / "forensic.json").write_text(json.dumps(info, indent=2))
     (run_dir / "FAILED").write_text(f"non-finite loss {loss!r} at step {step}")
 
@@ -244,6 +244,7 @@ def train(
         return json.loads(result_path.read_text())
     if (run_dir / "FAILED").exists():
         raise RunFailed((run_dir / "FAILED").read_text())
+    seg_start = time.monotonic()  # billing starts here: manifest check, model build and checkpoint load all count
     manifest = gdata.verify_manifest(data_dir)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     logger = logger or NullLogger()
@@ -268,7 +269,6 @@ def train(
     eval_every = cfg.eval_every or max(1, cfg.total_steps // 10)
     n_params = model.num_params()
 
-    seg_start = time.monotonic()
     last_ckpt = t_log = seg_start
     tokens_since_log = 0
 
@@ -297,10 +297,15 @@ def train(
                 _write_forensics(run_dir, model, optimizer, step, stream, accum, loss, lr, elapsed())
                 commit()
                 raise NonFiniteLoss(f"loss {loss!r} at step {step}; see {run_dir / 'forensic.json'}")
+            will_eval = (step + 1) % eval_every == 0 or step + 1 == cfg.total_steps
+            layer_norms = layer_grad_norms(model) if will_eval else {}  # pre-clip, like grad_norm
             clip = cfg.grad_clip if cfg.grad_clip is not None else math.inf
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip).item()  # pre-clip norm
-            will_eval = (step + 1) % eval_every == 0 or step + 1 == cfg.total_steps
-            layer_norms = layer_grad_norms(model) if will_eval else {}
+            if not math.isfinite(grad_norm):  # a NaN clip coefficient would poison every weight at optimizer.step()
+                losses_file.flush()
+                _write_forensics(run_dir, model, optimizer, step, stream, accum, loss, lr, elapsed(), grad_norm)
+                commit()
+                raise NonFiniteLoss(f"non-finite gradient norm {grad_norm!r} at step {step}; see {run_dir / 'forensic.json'}")
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             losses_file.write(json.dumps({"step": step, "loss": loss, "lr": lr, "grad_norm": grad_norm}) + "\n")
@@ -330,6 +335,8 @@ def train(
 
     final_loss = evaluate(model, val_path, cfg, device, max_tokens=None)
     total_seconds = elapsed()
+    # Time between the last checkpoint and a real preemption is lost, so gpu_seconds/cost_usd are a lower bound
+    # (at most ckpt_every_s of undercount per preemption).
     torch.save(model.state_dict(), run_dir / "final.pt")
     tokens = cfg.total_steps * cfg.batch_tokens
     result = {

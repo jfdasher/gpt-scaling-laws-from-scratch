@@ -108,3 +108,23 @@ def test_result_fields(tmp_path, data_dir):
     assert r["tokens"] == 20 * 256
     assert r["flops"] == 6.0 * r["n_params"] * r["tokens"]
     assert r["git_commit"] == "abc123"
+
+
+def test_nonfinite_gradient_fails_before_step(tmp_path, data_dir, monkeypatch):
+    from gptlab import train as T
+
+    real = T.torch.nn.utils.clip_grad_norm_
+    calls = {"n": 0}
+
+    def fake(params, clip):
+        calls["n"] += 1
+        real(params, clip)
+        return T.torch.tensor(float("nan")) if calls["n"] == 4 else T.torch.tensor(1.0)  # 4th call = step 3
+
+    monkeypatch.setattr(T.torch.nn.utils, "clip_grad_norm_", fake)
+    with pytest.raises(NonFiniteLoss, match="gradient"):
+        run(cfg(), tmp_path / "g", data_dir)
+    forensic = json.loads((tmp_path / "g" / "forensic.json").read_text())
+    assert forensic["step"] == 3
+    assert forensic["grad_norm"] == "nan"
+    assert (tmp_path / "g" / "FAILED").exists()
