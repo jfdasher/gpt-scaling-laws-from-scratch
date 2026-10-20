@@ -24,7 +24,7 @@ SAMPLE_PROMPTS = (
     "To solve a quadratic equation,",
     "The most important idea in biology is",
 )
-HASH_EXCLUDE = frozenset({"name", "phase", "budget_flops", "tokens_per_param"})  # bookkeeping, not behaviour
+HASH_EXCLUDE = frozenset({"name", "phase", "budget_flops", "tokens_per_param", "diag_every"})  # bookkeeping, not behaviour
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,7 @@ class TrainConfig:
     compile: bool = True
     budget_flops: float = 0.0
     tokens_per_param: float = 0.0
+    diag_every: int | None = None  # logging only: per-layer grad norms + attn max-logit to diag.jsonl every N steps
 
 
 def run_id(cfg: TrainConfig) -> str:
@@ -105,7 +106,8 @@ class WandbLogger:
 
         self._wandb = wandb
         self.run = wandb.init(
-            project=project, id=run_id(cfg), name=cfg.name, group=cfg.phase, config=asdict(cfg), resume="allow"
+            project=project, id=run_id(cfg), name=cfg.name, group=cfg.phase, config=asdict(cfg), resume="allow",
+            reinit="finish_previous",
         )
         self.url = self.run.url
 
@@ -203,6 +205,23 @@ def layer_grad_norms(model: GPT) -> dict:
     return out
 
 
+def diag_batch(val_path: Path, cfg: TrainConfig, device: str) -> torch.Tensor:
+    """Fixed diagnostic micro-batch: the first 8 rows of val.bin."""
+    x, _ = next(gdata.val_batches(val_path, cfg.seq_len, 8, 8 * cfg.seq_len))
+    return x.to(device)
+
+
+def diag_row(model: GPT, step: int, x: torch.Tensor | None, device: str, layer_norms: dict | None = None) -> dict:
+    """Per-layer grad norms (pre-clip, from .grad) and, if x is given, attention max-logits. Never touches RNG or weights."""
+    row = {"step": step, **(layer_norms if layer_norms is not None else layer_grad_norms(model))}
+    if x is not None:
+        stats: list[float] = []
+        with torch.no_grad(), _autocast(device):
+            model(x, stats=stats)
+        row.update({f"attn_max_logit/layer_{i}": v for i, v in enumerate(stats)})
+    return row
+
+
 def generate_samples(model: GPT, tokenizer_path: Path, prompts, device: str, max_new_tokens: int = 48):
     from tokenizers import Tokenizer
 
@@ -218,18 +237,28 @@ def generate_samples(model: GPT, tokenizer_path: Path, prompts, device: str, max
 
 
 def _write_forensics(run_dir, model, optimizer, step, stream, accum, loss, lr, gpu_seconds, grad_norm=None) -> None:
+    cause = f"non-finite loss {loss!r}" if grad_norm is None else f"non-finite gradient norm {grad_norm!r} (loss {loss!r})"
     torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "step": step}, run_dir / "forensic.pt")
     span = [stream.span(step * accum)[0], stream.span(step * accum + accum - 1)[1]]
     info = {"step": step, "loss": repr(loss), "grad_norm": None if grad_norm is None else repr(grad_norm), "lr": lr, "token_span": span, "gpu_seconds": gpu_seconds}
     (run_dir / "forensic.json").write_text(json.dumps(info, indent=2))
-    (run_dir / "FAILED").write_text(f"non-finite loss {loss!r} at step {step}")
+    (run_dir / "FAILED").write_text(f"{cause} at step {step}")
 
 
-def train(
+def train(cfg: TrainConfig, run_dir, data_dir, logger: Logger | None = None, **kw) -> dict:
+    """Run (or resume) one training run. The logger is finished on every exit path, exactly once."""
+    logger = logger or NullLogger()
+    try:
+        return _train(cfg, run_dir, data_dir, logger, **kw)
+    finally:
+        logger.finish()
+
+
+def _train(
     cfg: TrainConfig,
     run_dir,
     data_dir,
-    logger: Logger | None = None,
+    logger: Logger,
     device: str | None = None,
     commit: Callable[[], None] = lambda: None,
     preempt_at_step: int | None = None,
@@ -246,8 +275,14 @@ def train(
         raise RunFailed((run_dir / "FAILED").read_text())
     seg_start = time.monotonic()  # billing starts here: manifest check, model build and checkpoint load all count
     manifest = gdata.verify_manifest(data_dir)
+    n_train = len(gdata.load_tokens(data_dir / gdata.TRAIN_BIN))
+    need = cfg.data_offset + cfg.total_steps * cfg.batch_tokens + 1
+    if need > n_train:
+        raise gdata.DataExhausted(
+            f"{cfg.name}: needs {need:,} train tokens (offset {cfg.data_offset:,} + {cfg.total_steps:,} steps x "
+            f"{cfg.batch_tokens:,}) but train.bin has {n_train:,}"
+        )
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    logger = logger or NullLogger()
     (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
 
     torch.manual_seed(cfg.seed)
@@ -268,6 +303,20 @@ def train(
     val_path = data_dir / gdata.VAL_BIN
     eval_every = cfg.eval_every or max(1, cfg.total_steps // 10)
     n_params = model.num_params()
+    diag_path = run_dir / "diag.jsonl"
+    diag_x = None  # loaded lazily, once
+
+    def write_diag(at_step: int, with_attn: bool, layer_norms: dict | None = None) -> None:
+        nonlocal diag_x
+        if with_attn and diag_x is None:
+            diag_x = diag_batch(val_path, cfg, device)
+        row = diag_row(model, at_step, diag_x if with_attn else None, device, layer_norms)
+        with diag_path.open("a") as f:
+            f.write(json.dumps(row) + "\n")
+        logger.log({k: v for k, v in row.items() if k != "step"}, step=at_step)
+
+    def weights_finite() -> bool:
+        return all(bool(torch.isfinite(p).all()) for p in model.parameters())
 
     last_ckpt = t_log = seg_start
     tokens_since_log = 0
@@ -295,15 +344,22 @@ def train(
             if not math.isfinite(loss):
                 losses_file.flush()
                 _write_forensics(run_dir, model, optimizer, step, stream, accum, loss, lr, elapsed())
+                if cfg.diag_every:
+                    write_diag(step, weights_finite())
                 commit()
                 raise NonFiniteLoss(f"loss {loss!r} at step {step}; see {run_dir / 'forensic.json'}")
             will_eval = (step + 1) % eval_every == 0 or step + 1 == cfg.total_steps
-            layer_norms = layer_grad_norms(model) if will_eval else {}  # pre-clip, like grad_norm
+            diag_now = bool(cfg.diag_every) and step % cfg.diag_every == 0
+            layer_norms = layer_grad_norms(model) if (will_eval or diag_now) else {}  # pre-clip, like grad_norm
+            if diag_now:
+                write_diag(step, True, layer_norms)
             clip = cfg.grad_clip if cfg.grad_clip is not None else math.inf
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip).item()  # pre-clip norm
             if not math.isfinite(grad_norm):  # a NaN clip coefficient would poison every weight at optimizer.step()
                 losses_file.flush()
                 _write_forensics(run_dir, model, optimizer, step, stream, accum, loss, lr, elapsed(), grad_norm)
+                if cfg.diag_every and step % cfg.diag_every != 0:  # else this step's row is already written
+                    write_diag(step, weights_finite(), layer_norms or None)
                 commit()
                 raise NonFiniteLoss(f"non-finite gradient norm {grad_norm!r} at step {step}; see {run_dir / 'forensic.json'}")
             optimizer.step()
@@ -368,7 +424,6 @@ def train(
     os.replace(tmp, result_path)
     ckpt_path.unlink(missing_ok=True)
     commit()
-    logger.finish()
     return result
 
 

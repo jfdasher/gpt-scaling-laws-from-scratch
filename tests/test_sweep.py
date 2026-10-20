@@ -3,6 +3,7 @@ import math
 import sys
 
 import pytest
+from dataclasses import replace
 
 import sweep
 from gptlab.flops import size_for_budget
@@ -115,3 +116,26 @@ def test_fit_lr_rule_cli_refuses_without_results(tmp_path):
     assert e.value.code == 1 and not out.exists()
     sweep.main(args + ["--force"])
     assert out.exists()
+
+
+def test_diag_every_on_instability_configs_only():
+    by_name = {c.name: c for c in sweep.dynamics_configs(RULE)}
+    assert by_name["dyn/lr10x-noclip"].diag_every == 20
+    assert all(c.diag_every == 20 for n, c in by_name.items() if n.startswith("dyn/lr"))
+    assert by_name["dyn/baseline"].diag_every is None
+    assert all(c.diag_every is None for c in sweep.grid_configs(RULE))
+    grid = {c.name: c for c in sweep.grid_configs(RULE)}
+    assert run_id(by_name["dyn/baseline"]) == run_id(grid["grid/3e+16/r20"])
+    assert run_id(by_name["dyn/lr10x"]) == run_id(replace(by_name["dyn/lr10x"], diag_every=None))
+    assert all(f.diag_every == 20 for f in sweep.dynamics_fix_configs(RULE, "dyn/lr10x-noclip"))
+
+
+def test_skip_set():
+    remote = {"a": "done", "b": "failed", "c": "in_progress", "d": "in_progress"}
+    skip, warns = sweep.skip_set({"x"}, remote, ["a", "b", "c", "d", "e", "x"])
+    assert skip == {"x", "a", "b", "c", "d"}
+    assert len(warns) == 2 and all("WARNING" in w for w in warns)
+    skip, warns = sweep.skip_set(set(), remote, ["c", "e"], include_in_progress=True)
+    assert skip == {"a", "b"} and len(warns) == 1
+    skip, warns = sweep.skip_set({"c"}, remote, ["c"])  # locally done wins over a stale remote state
+    assert "c" in skip and not warns

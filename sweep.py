@@ -28,6 +28,7 @@ SMOKE_PREEMPT_STEP = 100
 # (budget, tokens/param, centre LR, number of LRs); the first two are the rule's ends, the third is the check
 LR_SWEEP = ((3e15, 80.0, 4e-3, 5), (3e16, 5.0, 2e-3, 5), (1e16, 20.0, 3e-3, 3))
 DYNAMICS_BUDGET, DYNAMICS_RATIO = 3e16, 20.0
+DIAG_EVERY = 20  # per-layer diagnostics cadence for the instability configs
 DEFAULT_FLOPS_PER_S = 7e13  # until bench.json exists
 RUN_OVERHEAD_S = 90.0  # container start + compile + final eval
 
@@ -91,8 +92,8 @@ def dynamics_configs(rule) -> list[TrainConfig]:
     lr = base.peak_lr
     out = [base]
     for mult in (3, 10):
-        out.append(replace(base, name=f"dyn/lr{mult}x", peak_lr=lr * mult))
-        out.append(replace(base, name=f"dyn/lr{mult}x-noclip", peak_lr=lr * mult, grad_clip=None))
+        out.append(replace(base, name=f"dyn/lr{mult}x", peak_lr=lr * mult, diag_every=DIAG_EVERY))
+        out.append(replace(base, name=f"dyn/lr{mult}x-noclip", peak_lr=lr * mult, grad_clip=None, diag_every=DIAG_EVERY))
     out += [
         replace(base, name="dyn/warmup0", warmup_frac=0.0),
         replace(base, name="dyn/warmup1", warmup_frac=0.01),
@@ -105,7 +106,10 @@ def dynamics_configs(rule) -> list[TrainConfig]:
 
 def dynamics_fix_configs(rule, from_run: str) -> list[TrainConfig]:
     src = {c.name: c for c in dynamics_configs(rule)}[from_run]
-    return [replace(src, name=f"{from_run}+qknorm", qk_norm=True), replace(src, name=f"{from_run}+zloss", z_loss=1e-4)]
+    return [
+        replace(src, name=f"{from_run}+qknorm", qk_norm=True, diag_every=DIAG_EVERY),
+        replace(src, name=f"{from_run}+zloss", z_loss=1e-4, diag_every=DIAG_EVERY),
+    ]
 
 
 def declared_test_config(n_opt: float, rule, budget: float = TEST_BUDGET) -> TrainConfig:
@@ -159,6 +163,21 @@ def done_run_ids(results_dir="results") -> set[str]:
     if (d / "failed").exists():
         ids |= {json.loads(p.read_text())["run_id"] for p in (d / "failed").glob("*.json")}
     return ids
+
+
+def skip_set(local_done: set[str], remote_states: dict[str, str], todo_ids, include_in_progress: bool = False) -> tuple[set[str], list[str]]:
+    """Run ids launch must not start: done/failed locally or on the volume, plus (by default) runs another
+    container may be training right now. Returns (skip_ids, warnings)."""
+    skip = set(local_done) | {r for r, st in remote_states.items() if st in ("done", "failed")}
+    warnings = []
+    for rid in todo_ids:
+        if rid not in skip and remote_states.get(rid) == "in_progress":
+            if include_in_progress:
+                warnings.append(f"WARNING: {rid} looks in progress on the volume; launching anyway (--include-in-progress)")
+            else:
+                warnings.append(f"WARNING: {rid} looks in progress on the volume; skipping (use --include-in-progress to override)")
+                skip.add(rid)
+    return skip, warnings
 
 
 def unique(cfgs: list[TrainConfig]) -> list[TrainConfig]:

@@ -29,9 +29,10 @@ WANDB_PROJECT = "gptlab-scaling"
 app = modal.App("gptlab")
 image = (
     modal.Image.debian_slim(python_version="3.12")
+    # Exact pins = the versions in uv.lock (torch without the local "+cpu" tag, so PyPI's default CUDA build installs).
     .pip_install(
-        "torch>=2.5", "numpy>=1.26", "tokenizers>=0.20", "pyarrow>=16", "huggingface_hub>=0.25", "wandb>=0.18",
-        "transformers>=4.45", "safetensors>=0.4", "scipy>=1.13",
+        "torch==2.14.1", "numpy==2.5.4", "tokenizers==0.23.3", "pyarrow==26.0.0", "huggingface_hub==2.2.0",
+        "wandb==0.31.0", "transformers==5.20.2", "safetensors==0.8.0", "scipy==1.18.1",
     )
     .env({"HF_HOME": HF_DIR, "TORCHINDUCTOR_CACHE_DIR": INDUCTOR_DIR})
     .add_local_python_source("gptlab", "sweep", "analysis")
@@ -187,15 +188,21 @@ def _commit_inductor() -> None:
 
 
 def _train_impl(cfg_dict: dict, preempt_at_step: int | None, git_commit: str | None) -> dict:
+    from gptlab.data import DataExhausted
     from gptlab.train import NonFiniteLoss, RunFailed, TrainConfig, WandbLogger, run_id, train
 
     ckpt_vol.reload()
     cfg = TrainConfig(**cfg_dict)
     run_dir = Path(CKPT_DIR) / "runs" / run_id(cfg)
+    # Short-circuit before touching W&B: a finished/failed run must not open (or reuse) a W&B run.
+    if (run_dir / "result.json").exists():
+        return json.loads((run_dir / "result.json").read_text())
+    if (run_dir / "FAILED").exists():
+        return {"failed": True, "run_id": run_id(cfg), "name": cfg.name, "error": repr(RunFailed((run_dir / "FAILED").read_text()))}
     try:
         return train(cfg, run_dir, DATA_DIR, logger=WandbLogger(WANDB_PROJECT, cfg), commit=ckpt_vol.commit,
                      preempt_at_step=preempt_at_step, git_commit=git_commit)
-    except (NonFiniteLoss, RunFailed) as e:
+    except (NonFiniteLoss, RunFailed, DataExhausted) as e:
         # deterministic failure: return (don't raise) so Modal doesn't burn retries on it
         return {"failed": True, "run_id": run_id(cfg), "name": cfg.name, "error": repr(e)}
     finally:
@@ -209,6 +216,7 @@ TRAIN_KW = dict(
     secrets=[modal.Secret.from_name("wandb")],
     retries=modal.Retries(max_retries=3, initial_delay=10.0, backoff_coefficient=1.0),
     max_containers=10,
+    single_use_containers=True,  # a warm container must never carry W&B state into the next config
 )
 
 
@@ -244,16 +252,34 @@ def run_phase(args: list[tuple[dict, int | None, str]], long: bool) -> list[str]
     return summaries
 
 
+@app.function(image=image, volumes={CKPT_DIR: ckpt_vol}, timeout=300)
+def run_states() -> dict:
+    """{run_id: "done" | "failed" | "in_progress"} from the checkpoint volume."""
+    ckpt_vol.reload()
+    out = {}
+    for d in (Path(CKPT_DIR) / "runs").glob("*"):
+        if (d / "result.json").exists():
+            out[d.name] = "done"
+        elif (d / "FAILED").exists():
+            out[d.name] = "failed"
+        elif (d / "ckpt.pt").exists() or (d / "losses.jsonl").exists():
+            out[d.name] = "in_progress"
+    return out
+
+
 @app.local_entrypoint()
 def launch(phase: str, yes: bool = False, from_run: str = "", lr_rule: str = "lr_rule.json",
-           prediction: str = "predictions/3e17.json"):
+           prediction: str = "predictions/3e17.json", include_in_progress: bool = False):
     import sweep
     from gptlab.train import run_id
 
     cfgs = sweep.unique(sweep.configs_for_phase(phase, lr_rule, from_run, prediction))
-    done = sweep.done_run_ids("results")
-    sweep.print_plan(cfgs, done)
-    todo = [c for c in cfgs if run_id(c) not in done]
+    skip, warnings = sweep.skip_set(sweep.done_run_ids("results"), run_states.remote(), [run_id(c) for c in cfgs],
+                                    include_in_progress)
+    for w in warnings:
+        print(w)
+    sweep.print_plan(cfgs, skip)
+    todo = [c for c in cfgs if run_id(c) not in skip]
     if not yes:
         print("dry run: nothing launched. Re-run with --yes to launch.")
         return
@@ -270,7 +296,7 @@ def launch(phase: str, yes: bool = False, from_run: str = "", lr_rule: str = "lr
 @app.function(image=image, volumes={CKPT_DIR: ckpt_vol}, timeout=900)
 def collect_results() -> dict:
     ckpt_vol.reload()
-    out = {"results": [], "failed": [], "curves": {}}
+    out = {"results": [], "failed": [], "curves": {}, "diag": {}}
     for d in sorted((Path(CKPT_DIR) / "runs").glob("*")):
         if (d / "result.json").exists():
             out["results"].append(json.loads((d / "result.json").read_text()))
@@ -281,6 +307,8 @@ def collect_results() -> dict:
                                   "forensic": forensic})
         if (d / "losses.jsonl").exists():
             out["curves"][d.name] = (d / "losses.jsonl").read_text()
+        if (d / "diag.jsonl").exists():
+            out["diag"][d.name] = (d / "diag.jsonl").read_text()
     return out
 
 
@@ -296,7 +324,9 @@ def pull_results(out: str = "results"):
         (root / "failed" / f"{f['run_id']}.json").write_text(json.dumps(f, indent=2))
     for rid, text in got["curves"].items():
         (root / "curves" / f"{rid}.jsonl").write_text(text)
-    print(f"{len(got['results'])} results, {len(got['failed'])} failed, {len(got['curves'])} curves -> {root}/")
+    for rid, text in got["diag"].items():
+        (root / "curves" / f"{rid}.diag.jsonl").write_text(text)
+    print(f"{len(got['results'])} results, {len(got['failed'])} failed, {len(got['curves'])} curves, {len(got['diag'])} diag -> {root}/")
 
 
 @app.function(image=image, volumes={DATA_DIR: data_vol, CKPT_DIR: ckpt_vol},
