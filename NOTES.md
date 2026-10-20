@@ -58,3 +58,9 @@ Format: `## YYYY-MM-DD — short title`, then what happened, how it was diagnose
 - **Prediction for C = 3e17**, committed and tagged before any test run:
   - Isoflop N_opt = 57.1M [10.5M, 1.21B]. Declared run: 17 layers × 512 (57,132,544 params), 875M tokens (15.3 tok/param), LR 1.22e-3 from the rule.
   - Predicted val loss: parametric 3.106 (parameter interval 3.032–3.193; prediction interval incl. seed noise 2.923–3.271); isoflop-frontier extrapolation 3.008 (point estimate).
+
+## 2026-10-20 — 3e17 test run vs prediction
+- Declared config (57.1M params, 875M tokens, LR 1.22e-3), trained after the `prediction-3e17` tag. Val loss **3.0407** ($1.47).
+- Parametric prediction 3.106: error −0.065 (−2.1%). It sits inside both the parameter interval (3.032–3.193) and the prediction interval (2.923–3.271), at −0.76σ.
+- Isoflop-frontier extrapolation 3.008: error +0.033 (+1.1%), +0.38σ.
+- The two methods bracket the truth. The parametric fit's floor E ≈ 2.7 makes it slightly pessimistic, and the floor-free log-log frontier slightly optimistic. Both are within ~1σ of seed noise at 3× extrapolation in compute.

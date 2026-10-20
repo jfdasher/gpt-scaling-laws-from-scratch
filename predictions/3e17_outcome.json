@@ -1,0 +1,18 @@
+{
+  "actual_val_loss": 3.0406686703148393,
+  "run": "test/3e+17",
+  "parametric": {
+    "predicted": 3.105522532152891,
+    "error": -0.06485386183805186,
+    "rel_error": -0.020883397613957154,
+    "inside_param_interval": true,
+    "inside_prediction_interval": true,
+    "error_over_sigma": -0.7599205784363244
+  },
+  "isoflop_frontier": {
+    "predicted": 3.008082508569027,
+    "error": 0.032586161745812525,
+    "rel_error": 0.01083286833156517,
+    "error_over_sigma": 0.3818260652655273
+  }
+}
