@@ -3876,7 +3876,7 @@ git commit -m "phase2: LR sweep and fitted LR rule"
 > **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it "verified inline", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.
 
 **Files:**
-- Create (outputs): `results/…`, `results/fits/isoflop.json`, `figures/dyn_instability.png`, `figures/dyn_warmup.png`, `figures/dyn_beta2.png`, `figures/dyn_batch.png`
+- Create (outputs): `results/…`, `results/fits/isoflop.json`, `figures/dyn_instability.png`, `figures/dyn_warmup.png`, `figures/dyn_beta2.png`, `figures/dyn_batch.png`, `figures/dyn_instability_layers_<name>.png` (diverged config and its fixes)
 - Modify: `sweep.py` (`GRID_EXTRA_RATIOS`, only if a gate fails), `NOTES.md`
 
 **Acceptance Criteria:**
@@ -3886,7 +3886,7 @@ git commit -m "phase2: LR sweep and fitted LR rule"
 - [ ] All 12 dynamics runs are accounted for (result or FAILED with forensics); the diverging config is identified, and its `+qknorm` and `+zloss` fixes have been run
 - [ ] Four dynamics figures are committed, and `NOTES.md` has a dated, one-paragraph diagnosis per experiment (instability: which layer's grad norm or attention max-logit blew up first, and at what step)
 
-**Verify:** `uv run python -m analysis.isoflop results` → 4 lines ending `ok`; `ls figures/dyn_*.png | wc -l` → `4`
+**Verify:** `uv run python -m analysis.isoflop results` → 4 lines ending `ok`; `ls figures/dyn_{instability,warmup,beta2,batch}.png | wc -l` → `4`
 
 **Steps:**
 
@@ -3899,6 +3899,11 @@ Expected: 25 runs. Show the cost to the user and wait for a go.
 
 Run: `uv run modal run --detach modal_app.py::launch --phase grid --yes`
 Expected: 25 `done` lines
+
+- [ ] **Step 2b: Wait for the grid, then pull it**
+
+Wait until the detached grid run has finished (25 `done` lines, or check the Modal dashboard), then run: `uv run modal run modal_app.py::pull_results`
+Expected: 25 grid results in `results/`. `launch` also asks the volume which runs are done or in progress, but pulling first keeps the local plan accurate and lets `dyn/baseline` show `skip`. Never launch the dynamics phase while the grid is still running: `launch` skips runs that look in progress unless `--include-in-progress` is passed.
 
 - [ ] **Step 3: Dynamics dry run, approval and launch**
 
@@ -3933,6 +3938,13 @@ def curves(names):
     return {n: load_curve("results", ids[n]) for n in names if n in ids}
 inst = [n for n in ids if n.startswith("dyn/lr")] + ["dyn/baseline"]
 plot_curves(curves(inst), "Instability: LR multiples, clipping, QK-norm, z-loss", "figures/dyn_instability.png", ylim=(2, 10))
+from analysis.common import load_diag
+from analysis.plots import plot_layer_diagnostics
+# per-layer view (grad norm + attention max-logit every 20 steps) for the diverged config and each of its fixes
+bad = "dyn/lr10x-noclip"  # replace with the config diagnosed in Step 5
+for n in [bad, f"{bad}+qknorm", f"{bad}+zloss"]:
+    if n in ids and (d := load_diag("results", ids[n])):
+        plot_layer_diagnostics(d, n, f"figures/dyn_instability_layers_{n.replace('/', '_')}.png")
 plot_curves(curves(["dyn/baseline", "dyn/warmup0", "dyn/warmup1"]), "Warmup 5% / 0% / 1%", "figures/dyn_warmup.png")
 plot_curves(curves(["dyn/baseline", "dyn/beta2-0.999"]), "beta2 0.95 vs 0.999", "figures/dyn_beta2.png")
 plot_curves(curves(["dyn/batch32k", "dyn/baseline", "dyn/batch128k", "dyn/batch256k", "dyn/batch512k"]),
@@ -3940,7 +3952,7 @@ plot_curves(curves(["dyn/batch32k", "dyn/baseline", "dyn/batch128k", "dyn/batch2
 print("ok")
 EOF
 ```
-Expected: `ok`, and 4 PNGs. Add a final-loss-vs-batch-size note for each run to `NOTES.md`. Remember the step axis differs between batch sizes, so compare final loss, not curves.
+Expected: `ok`, and 4 `dyn_*.png` figures plus the per-layer `dyn_instability_layers_*.png` figures. Add a final-loss-vs-batch-size note for each run to `NOTES.md`. Remember the step axis differs between batch sizes, so compare final loss, not curves.
 
 - [ ] **Step 7: Commit**
 
