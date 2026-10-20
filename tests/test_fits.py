@@ -59,14 +59,15 @@ def test_parametric_recovers_law():
 def test_prediction_and_compare(tmp_path):
     res = synthetic_results(noise=1e-4)
     rule = (math.log(3e-3) + 0.3 * math.log(2.5e6), -0.3)
-    p = predict.make_prediction(res, rule, n_boot=50)
+    p = predict.make_prediction(res, rule, n_boot=50, manifest_path=tmp_path / "no_manifest.json")
     assert {"isoflop", "parametric", "declared_config", "declared", "predicted_loss"} <= set(p)
     assert p["isoflop"]["n_opt_lo"] <= p["isoflop"]["n_opt"] <= p["isoflop"]["n_opt_hi"]
     out = tmp_path / "pred.json"
     predict.write_prediction(p, out)
     with pytest.raises(FileExistsError):
         predict.write_prediction(p, out)
-    actual = {"val_loss": p["predicted_loss"]["parametric"]["value"] + 0.01, "name": "test/3e+17"}
+    actual = {"val_loss": p["predicted_loss"]["parametric"]["value"] + 0.01, "name": "test/3e+17",
+              "run_id": predict.run_id(predict.TrainConfig(**p["declared_config"]))}
     cmp = predict.compare(p, actual)
     assert math.isclose(cmp["parametric"]["error"], 0.01, abs_tol=1e-9)
     assert "inside_param_interval" in cmp["parametric"]
@@ -114,3 +115,43 @@ def test_non_grid_phases_ignored():
     assert isoflop.grid_points(res + extra) == base_pts
     for a, b in zip(isoflop.grid_runs(res + extra), base_runs):
         assert np.array_equal(a, b)
+
+
+def _prediction(tmp_path, **kw):
+    rule = (math.log(3e-3) + 0.3 * math.log(2.5e6), -0.3)
+    return predict.make_prediction(synthetic_results(noise=1e-4), rule, n_boot=20, **kw)
+
+
+def test_prediction_refuses_when_data_too_small(tmp_path):
+    p = _prediction(tmp_path, manifest_path=tmp_path / "none.json")
+    tokens = p["declared"]["tokens"]
+    small = tmp_path / "val_manifest.json"
+    small.write_text(json.dumps({"train_tokens": tokens}))  # needs tokens + 1
+    with pytest.raises(ValueError, match="train tokens"):
+        _prediction(tmp_path, manifest_path=small)
+    small.write_text(json.dumps({"train_tokens": tokens + 1}))
+    _prediction(tmp_path, manifest_path=small)
+
+
+def test_compare_rejects_wrong_or_missing_test_run(tmp_path):
+    p = _prediction(tmp_path, manifest_path=tmp_path / "none.json")
+    with pytest.raises(ValueError, match="phase"):
+        predict.select_test_result([{"phase": "grid", "run_id": "x"}])
+    with pytest.raises(ValueError, match="deadbeef"):
+        predict.compare(p, {"val_loss": 3.0, "run_id": "deadbeef"})
+
+
+def test_compare_cli_refuses_overwrite(tmp_path):
+    p = _prediction(tmp_path, manifest_path=tmp_path / "none.json")
+    pred = tmp_path / "pred.json"
+    predict.write_prediction(p, pred)
+    results = tmp_path / "results"
+    results.mkdir()
+    rid = predict.run_id(predict.TrainConfig(**p["declared_config"]))
+    (results / f"{rid}.json").write_text(json.dumps({"run_id": rid, "phase": "test", "name": "t", "val_loss": 3.5}))
+    args = ["compare", "--prediction", str(pred), "--results", str(results)]
+    predict.main(args)
+    assert (tmp_path / "pred_outcome.json").exists()
+    with pytest.raises(FileExistsError):
+        predict.main(args)
+    predict.main(args + ["--force"])

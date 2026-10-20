@@ -27,3 +27,11 @@ def test_plots_write_files(tmp_path):
     ]
     for p in paths:
         assert p.exists() and p.stat().st_size > 1000
+
+
+def test_plot_layer_diagnostics(tmp_path):
+    rows = [{"step": s, **{f"grad_norm/layer_{i}": 1.0 + i * s for i in range(3)},
+             **{f"attn_max_logit/layer_{i}": float("nan") if s == 40 else 5.0 * i for i in range(3)}}
+            for s in range(0, 60, 20)]
+    p = plots.plot_layer_diagnostics(rows, "diag", tmp_path / "layers.png")
+    assert p.exists() and p.stat().st_size > 1000

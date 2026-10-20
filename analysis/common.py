@@ -22,3 +22,15 @@ def load_curve(results_dir, run_id: str) -> list[dict]:
         r = json.loads(line)
         rows[r["step"]] = r
     return [rows[s] for s in sorted(rows)]
+
+
+def load_diag(results_dir, run_id: str) -> list[dict]:
+    """Per-layer diagnostic rows (grad norms, attention max-logits) by step; empty if the run logged none."""
+    path = Path(results_dir) / "curves" / f"{run_id}.diag.jsonl"
+    if not path.exists():
+        return []
+    rows: dict[int, dict] = {}
+    for line in path.read_text().splitlines():
+        r = json.loads(line)
+        rows[r["step"]] = r
+    return [rows[s] for s in sorted(rows)]

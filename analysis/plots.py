@@ -119,6 +119,28 @@ def plot_curves(curves: dict[str, list[dict]], title: str, path, metric: str = "
     return _save(fig, path)
 
 
+def plot_layer_diagnostics(rows: list[dict], title: str, path) -> Path:
+    """Per-layer pre-clip grad norm (log y) and attention max-logit against step, one line per layer."""
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharex=True)
+    steps = [r["step"] for r in rows]
+    for ax, prefix, ylabel in (
+        (axes[0], "grad_norm/layer_", "grad norm (pre-clip)"),
+        (axes[1], "attn_max_logit/layer_", "attention max logit"),
+    ):
+        keys = sorted({k for r in rows for k in r if k.startswith(prefix)}, key=lambda k: int(k[len(prefix):]))
+        for k in keys:
+            ys = [r.get(k, math.nan) for r in rows]
+            ys = [y if y is not None and math.isfinite(y) else math.nan for y in ys]
+            ax.plot(steps, ys, lw=1, label=f"layer {k[len(prefix):]}")
+        ax.set(xlabel="step", ylabel=ylabel)
+        if prefix.startswith("grad"):
+            ax.set_yscale("log")
+        if keys:
+            ax.legend(fontsize=7, ncol=2)
+    fig.suptitle(title)
+    return _save(fig, path)
+
+
 def main(results_dir="results", out_dir="figures") -> None:
     fits = Path(results_dir, "fits", "isoflop.json")
     if fits.exists():

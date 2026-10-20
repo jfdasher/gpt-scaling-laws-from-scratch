@@ -17,12 +17,24 @@ import numpy as np
 
 from analysis import isoflop, parametric
 from analysis.common import load_results
+from gptlab.train import TrainConfig, run_id
 from gptlab.flops import param_count
 
 TEST_BUDGET = 3e17
+DATA_MANIFEST = "data/val_manifest.json"
 
 
-def make_prediction(results, rule, budget: float = TEST_BUDGET, n_boot: int = 1000) -> dict:
+def check_data_budget(tokens: int, manifest_path=DATA_MANIFEST) -> None:
+    """The declared run needs tokens + 1 train tokens; refuse to pre-register a run the data cannot feed."""
+    path = Path(manifest_path)
+    if not path.exists():
+        return
+    have = json.loads(path.read_text()).get("train_tokens")
+    if have is not None and tokens + 1 > have:
+        raise ValueError(f"declared run needs {tokens + 1:,} train tokens but {path} has only {have:,}")
+
+
+def make_prediction(results, rule, budget: float = TEST_BUDGET, n_boot: int = 1000, manifest_path=DATA_MANIFEST) -> dict:
     import sweep
 
     optima = isoflop.isoflop_optima(isoflop.grid_points(results), isoflop.seed_sigma(results), n_boot)
@@ -31,6 +43,7 @@ def make_prediction(results, rule, budget: float = TEST_BUDGET, n_boot: int = 10
     cfg = sweep.declared_test_config(n_iso, rule, budget)
     n_decl = param_count(cfg.n_layer, cfg.d_model)
     d_decl = cfg.total_steps * cfg.batch_tokens
+    check_data_budget(d_decl, manifest_path)
 
     N, D, L = isoflop.grid_runs(results)
     full = parametric.fit(N, D, L)
@@ -68,7 +81,17 @@ def write_prediction(p: dict, path, force: bool = False) -> None:
     path.write_text(json.dumps(p, indent=2))
 
 
+def select_test_result(results: list[dict]) -> dict:
+    tests = [r for r in results if r.get("phase") == "test"]
+    if not tests:
+        raise ValueError("no result with phase == 'test' found; has the 3e17 run finished and been pulled?")
+    return tests[0]
+
+
 def compare(p: dict, actual: dict) -> dict:
+    declared = run_id(TrainConfig(**p["declared_config"]))
+    if actual.get("run_id") != declared:
+        raise ValueError(f"test result run_id {actual.get('run_id')} != declared config run_id {declared}")
     out = {"actual_val_loss": actual["val_loss"], "run": actual.get("name")}
     for method, pred in p["predicted_loss"].items():
         entry = {"predicted": pred["value"], "error": actual["val_loss"] - pred["value"],
@@ -95,6 +118,7 @@ def main(argv=None) -> None:
     c = sub.add_parser("compare")
     c.add_argument("--prediction", default="predictions/3e17.json")
     c.add_argument("--results", default="results")
+    c.add_argument("--force", action="store_true")
     args = ap.parse_args(argv)
     if args.cmd == "make":
         p = make_prediction(load_results(args.results), sweep.load_lr_rule(args.lr_rule))
@@ -103,9 +127,12 @@ def main(argv=None) -> None:
         print(json.dumps({k: p[k] for k in ("isoflop", "declared", "predicted_loss")}, indent=2))
     else:
         p = json.loads(Path(args.prediction).read_text())
-        actual = next(r for r in load_results(args.results) if r.get("phase") == "test")
+        actual = select_test_result(load_results(args.results))
+        out_path = Path(args.prediction).with_name(Path(args.prediction).stem + "_outcome.json")
+        if out_path.exists() and not args.force:
+            raise FileExistsError(f"{out_path} exists; use --force to overwrite")
         out = compare(p, actual)
-        Path(args.prediction).with_name(Path(args.prediction).stem + "_outcome.json").write_text(json.dumps(out, indent=2))
+        out_path.write_text(json.dumps(out, indent=2))
         print(json.dumps(out, indent=2))
 
 
