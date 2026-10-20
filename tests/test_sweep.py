@@ -5,6 +5,7 @@ import sys
 import pytest
 
 import sweep
+from gptlab.flops import size_for_budget
 from gptlab.train import run_id
 
 RULE = (math.log(3e-3) + 0.3 * math.log(2.5e6), -0.3)  # lr = 3e-3 at 2.5M, falling as N^-0.3
@@ -86,3 +87,31 @@ def test_plan_cli_does_not_import_modal(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "25 runs" in out and "$" in out
     assert "modal" not in sys.modules
+
+
+def test_grid_does_not_collide_with_lr_sweep():
+    ends = [size_for_budget(b, r) for b, r, _, _ in sweep.LR_SWEEP[:2]]
+    c1 = math.log(2e-3 / 4e-3) / math.log(ends[1].n_params / ends[0].n_params)
+    c0 = math.log(4e-3) - c1 * math.log(ends[0].n_params)
+    grid_ids = {run_id(c) for c in sweep.grid_configs((c0, c1))}
+    assert not {run_id(c) for c in sweep.lr_configs()} & grid_ids
+    for c in sweep.dynamics_configs((c0, c1)):
+        if c.name != "dyn/baseline":
+            assert run_id(c) not in grid_ids
+
+
+def test_best_lrs_nan_not_selected():
+    cfgs = sweep.lr_configs()[:5]
+    losses = [3.0, 2.0, float("nan"), 2.5, 3.0]
+    groups = sweep.best_lrs(cfgs, [_result(c, l) for c, l in zip(cfgs, losses)])
+    assert groups[0]["best_lr"] == cfgs[1].peak_lr
+
+
+def test_fit_lr_rule_cli_refuses_without_results(tmp_path):
+    out = tmp_path / "lr_rule.json"
+    args = ["fit-lr-rule", "--results", str(tmp_path / "none"), "--out", str(out)]
+    with pytest.raises(SystemExit) as e:
+        sweep.main(args)
+    assert e.value.code == 1 and not out.exists()
+    sweep.main(args + ["--force"])
+    assert out.exists()

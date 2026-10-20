@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -72,17 +73,17 @@ def grid_configs(rule) -> list[TrainConfig]:
         for ratio in GRID_RATIOS + GRID_EXTRA_RATIOS.get(budget, ()):
             s = size_for_budget(budget, ratio)
             lr = lr_for(s.n_params, rule)
-            out.append(make_config("grid", f"grid/{budget:.0e}/r{ratio:g}", budget, ratio, lr))
+            out.append(make_config("grid", f"grid/{budget:.0e}/r{ratio:g}", budget, ratio, lr, tag="grid"))
             if budget == GRID_BUDGETS[0]:
                 out.append(
-                    make_config("grid", f"grid/{budget:.0e}/r{ratio:g}/seed1", budget, ratio, lr, seed=1, data_offset=SEED1_OFFSET)
+                    make_config("grid", f"grid/{budget:.0e}/r{ratio:g}/seed1", budget, ratio, lr, seed=1, data_offset=SEED1_OFFSET, tag="grid")
                 )
     return out
 
 
 def dynamics_base(rule) -> TrainConfig:
     s = size_for_budget(DYNAMICS_BUDGET, DYNAMICS_RATIO)
-    return make_config("dynamics", "dyn/baseline", DYNAMICS_BUDGET, DYNAMICS_RATIO, lr_for(s.n_params, rule))
+    return make_config("dynamics", "dyn/baseline", DYNAMICS_BUDGET, DYNAMICS_RATIO, lr_for(s.n_params, rule), tag="grid")
 
 
 def dynamics_configs(rule) -> list[TrainConfig]:
@@ -98,7 +99,7 @@ def dynamics_configs(rule) -> list[TrainConfig]:
         replace(base, name="dyn/beta2-0.999", beta2=0.999),
     ]
     for bt in (32768, 131072, 262144, 524288):  # same LR at every batch size: noted as a limitation
-        out.append(make_config("dynamics", f"dyn/batch{bt // 1024}k", DYNAMICS_BUDGET, DYNAMICS_RATIO, lr, batch_tokens=bt))
+        out.append(make_config("dynamics", f"dyn/batch{bt // 1024}k", DYNAMICS_BUDGET, DYNAMICS_RATIO, lr, batch_tokens=bt, tag="grid"))
     return out
 
 
@@ -200,11 +201,12 @@ def best_lrs(cfgs: list[TrainConfig], results: list[dict]) -> list[dict]:
     for (budget, ratio), members in groups.items():
         members.sort(key=lambda c: c.peak_lr)
         losses = [by_id[run_id(c)]["val_loss"] if run_id(c) in by_id else math.inf for c in members]
+        losses = [x if x is not None and math.isfinite(x) else math.inf for x in losses]
         i = int(np.argmin(losses))
         out.append({
             "budget": budget, "ratio": ratio, "n_params": param_count(members[0].n_layer, members[0].d_model),
             "lrs": [c.peak_lr for c in members], "losses": losses, "best_lr": members[i].peak_lr,
-            "interior": 0 < i < len(members) - 1,
+            "interior": 0 < i < len(members) - 1 and math.isfinite(losses[i]),
         })
     order = {(b, r): k for k, (b, r, _, _) in enumerate(LR_SWEEP)}
     return sorted(out, key=lambda g: order[(g["budget"], g["ratio"])])
@@ -233,6 +235,7 @@ def main(argv=None) -> None:
     f = sub.add_parser("fit-lr-rule")
     f.add_argument("--results", default="results")
     f.add_argument("--out", default="lr_rule.json")
+    f.add_argument("--force", action="store_true")
     args = ap.parse_args(argv)
     if args.cmd == "plan":
         cfgs = configs_for_phase(args.phase, args.lr_rule, args.from_run, args.prediction)
@@ -242,6 +245,9 @@ def main(argv=None) -> None:
         for g in groups:
             flag = "ok" if g["interior"] else "EDGE: extend LR_SWEEP centre toward this end and rerun"
             print(f"{g['budget']:.0e} r{g['ratio']:g} N={g['n_params']:,} best_lr={g['best_lr']:.3g} {flag}")
+        if not all(g["interior"] for g in groups) and not args.force:
+            print("refusing to write lr_rule.json: edge or missing optimum (use --force to override)")
+            sys.exit(1)
         rule = fit_lr_rule(groups)
         print(f"rule: ln lr = {rule['c0']:.4f} + {rule['c1']:.4f} ln N; check ratio {rule['check_ratio']:.2f} (want 0.5-2)")
         Path(args.out).write_text(json.dumps(rule, indent=2))
