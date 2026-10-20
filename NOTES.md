@@ -41,3 +41,13 @@ Format: `## YYYY-MM-DD — short title`, then what happened, how it was diagnose
 - Instability: 3× LR ends at 4.24 (clip) / 4.46 (no clip); 10× LR ends at 5.38 / 6.10. **None went NaN.** Per-layer diagnostics, every 20 steps, show the mechanism: attention max-logit grows from ~0.7 at init to 1e3–1.4e4 at 3× and 2e4–3e5 at 10×, worst in the last layers. Softmax saturates and attention becomes one-hot. Loss stalls around 6.6 at 10× until the LR decays. Gradient norms in the middle layers collapse to ~0.01 while layer 0 spikes (15 at step 2818 in lr10x; total 2,931 in lr10x-noclip). It's attention-logit growth (Dehghani et al. 2023; Wortsman et al. 2023), not a loss blow-up, which is why a NaN guard alone would never have caught it.
 - Clipping helps but does not fix it: at 3× it narrows the gap (4.24 vs 4.46) without stopping logit growth.
 - **Fixes at 10× LR, no clip:** QK-norm gives 3.574, against 6.105 unmodified and 3.445 for the tuned baseline; max attention logits stay bounded at ~14–30. z-loss gives 5.974, essentially no help. z-loss constrains the output softmax normaliser (log Z), not attention logits, so it can't touch this failure mode. That's a useful negative result.
+
+## 2026-10-20 — Grid v2: batch per budget
+- Reran 3e15/1e16/3e16 at batch 16k/32k/32k (1e17 stays 64k, results reused; grid/3e16/r20 at 32k is the identical run to dyn/batch32k and is reused). 19 new runs, ~$3.40. Minimum steps per run is now ~2,800 (was 753).
+- Isoflop optima, v1 (64k everywhere) → v2:
+  - 3e15: 2.0M (EDGE) → 4.5M (25 tok/param).
+  - 1e16: 7.2M → 9.1M (20).
+  - 3e16: 12.9M → 17.5M (16).
+  - 1e17: 29.7M (19), unchanged.
+- Exponent a: v1 0.747 → v2 **0.545**, against Chinchilla's ~0.5. The v1 bias went the predicted direction: step starvation penalised the large-N points most, which pushed N_opt down at small C and steepened a.
+- Seed noise σ = 0.085 nats, but it is dominated by one pair: 3e15/r5 (10M params, 5 tok/param) at 4.270 vs 4.019. r10 differs by 0.098; r20, r40 and r80 by 0.0005, 0.016 and 0.004. The r5 gap isn't instability (max grad norm 5.8, no attention blow-up). Train-loss bumps of ~0.2 appear at identical steps in runs reading the same data region (2335 for seed-0 runs, 4259 for seed-1), so they are data-driven. I'm keeping the pre-registered estimator (RMS over all pairs) rather than switching to a robust one after seeing the data. The isoflop intervals on a (0.12–1.67) are therefore wide and probably pessimistic for the larger budgets.
