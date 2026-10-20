@@ -13,6 +13,8 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
+
 from analysis import isoflop, parametric
 from analysis.common import load_results
 from gptlab.flops import param_count
@@ -35,10 +37,15 @@ def make_prediction(results, rule, budget: float = TEST_BUDGET, n_boot: int = 10
     boots = parametric.bootstrap(N, D, L, full, n_boot=n_boot)
     n_par, d_par = parametric.optimal_allocation(full, budget)
     n_par_lo, n_par_hi = parametric.interval([parametric.optimal_allocation(b, budget)[0] for b in boots])
-    loss_lo, loss_hi = parametric.interval([parametric.predicted_loss(b, n_decl, d_decl) for b in boots])
+    sigma = isoflop.seed_sigma(results)
+    mean_losses = [parametric.predicted_loss(b, n_decl, d_decl) for b in boots]
+    loss_lo, loss_hi = parametric.interval(mean_losses)
+    noise = np.random.default_rng(0).normal(0, sigma, len(mean_losses))
+    pred_lo, pred_hi = parametric.interval(np.asarray(mean_losses) + noise)
     return {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "budget": budget,
+        "seed_sigma": sigma,
         "isoflop": {"n_opt": n_iso, "n_opt_lo": n_lo, "n_opt_hi": n_hi, "d_opt": budget / (6 * n_iso),
                     "a": exps["a"], "a_lo": exps["a_lo"], "a_hi": exps["a_hi"]},
         "parametric": {"n_opt": n_par, "n_opt_lo": n_par_lo, "n_opt_hi": n_par_hi, "d_opt": d_par,
@@ -46,7 +53,8 @@ def make_prediction(results, rule, budget: float = TEST_BUDGET, n_boot: int = 10
         "declared_config": asdict(cfg),
         "declared": {"n_params": n_decl, "tokens": d_decl, "rule": "isoflop N_opt snapped to a shape"},
         "predicted_loss": {
-            "parametric": {"value": parametric.predicted_loss(full, n_decl, d_decl), "lo": loss_lo, "hi": loss_hi},
+            "parametric": {"value": parametric.predicted_loss(full, n_decl, d_decl), "param_lo": loss_lo, "param_hi": loss_hi,
+                           "pred_lo": pred_lo, "pred_hi": pred_hi},
             "isoflop_frontier": {"value": isoflop.frontier_predict(optima, budget), "note": "point estimate, no interval"},
         },
     }
@@ -65,8 +73,11 @@ def compare(p: dict, actual: dict) -> dict:
     for method, pred in p["predicted_loss"].items():
         entry = {"predicted": pred["value"], "error": actual["val_loss"] - pred["value"],
                  "rel_error": (actual["val_loss"] - pred["value"]) / pred["value"]}
-        if "lo" in pred:
-            entry["inside_interval"] = pred["lo"] <= actual["val_loss"] <= pred["hi"]
+        if "param_lo" in pred:
+            entry["inside_param_interval"] = pred["param_lo"] <= actual["val_loss"] <= pred["param_hi"]
+            entry["inside_prediction_interval"] = pred["pred_lo"] <= actual["val_loss"] <= pred["pred_hi"]
+        if "seed_sigma" in p:
+            entry["error_over_sigma"] = entry["error"] / p["seed_sigma"]
         out[method] = entry
     return out
 

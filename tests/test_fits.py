@@ -69,7 +69,10 @@ def test_prediction_and_compare(tmp_path):
     actual = {"val_loss": p["predicted_loss"]["parametric"]["value"] + 0.01, "name": "test/3e+17"}
     cmp = predict.compare(p, actual)
     assert math.isclose(cmp["parametric"]["error"], 0.01, abs_tol=1e-9)
-    assert "inside_interval" in cmp["parametric"]
+    assert "inside_param_interval" in cmp["parametric"]
+    assert "inside_prediction_interval" in cmp["parametric"]
+    assert math.isclose(cmp["parametric"]["error_over_sigma"], 0.01 / p["seed_sigma"], rel_tol=1e-9)
+    assert p["predicted_loss"]["parametric"]["pred_lo"] <= p["predicted_loss"]["parametric"]["pred_hi"]
 
 
 def test_costs():
@@ -79,3 +82,35 @@ def test_costs():
     totals = costs.phase_totals([r], failed, dollars_per_hour=4.0)
     assert totals["dynamics"]["gpu_hours"] == 1.0 and totals["dynamics"]["cost_usd"] == 4.0
     assert totals["grid"]["runs"] == 1
+
+
+def test_gradient_matches_numeric():
+    from scipy.optimize import check_grad
+
+    N, D, L = isoflop.grid_runs(synthetic_results(noise=1e-3))
+    args = (np.log(N), np.log(D), np.log(L), parametric.HUBER_DELTA)
+    theta = np.array([6.0, 6.0, 0.5, 0.34, 0.28])
+    err = check_grad(lambda t: parametric._objective(t, *args)[0], lambda t: parametric._objective(t, *args)[1], theta)
+    assert err < 1e-3 * np.linalg.norm(parametric._objective(theta, *args)[1])
+
+
+def test_optimal_allocation_matches_numeric():
+    from scipy.optimize import minimize_scalar
+
+    p = dict(TRUE)
+    c = 3e15
+    n, d = parametric.optimal_allocation(p, c)
+    res = minimize_scalar(lambda x: law(math.exp(x), c / (6 * math.exp(x))), bounds=(math.log(1e5), math.log(1e9)),
+                          method="bounded", options={"xatol": 1e-10})
+    assert math.isclose(n, math.exp(res.x), rel_tol=0.01)
+    assert math.isclose(n, 5.8e6, rel_tol=0.05)
+    assert math.isclose(d, c / (6 * n))
+
+
+def test_non_grid_phases_ignored():
+    res = synthetic_results(noise=1e-4)
+    base_pts, base_runs = isoflop.grid_points(res), isoflop.grid_runs(res)
+    extra = [dict(res[0], phase="dynamics", val_loss=9.0, name="dyn/x"), dict(res[0], phase="lr", val_loss=7.0, name="lr/x")]
+    assert isoflop.grid_points(res + extra) == base_pts
+    for a, b in zip(isoflop.grid_runs(res + extra), base_runs):
+        assert np.array_equal(a, b)

@@ -108,7 +108,11 @@ def public(d: dict) -> dict:
 def main(results_dir="results") -> None:
     res = load_results(results_dir)
     sigma = seed_sigma(res)
-    optima = isoflop_optima(grid_points(res), sigma)
+    points = grid_points(res)
+    for budget, pts in sorted(points.items()):
+        if len(pts) < 5:
+            print(f"WARNING: budget {budget:.0e} has {len(pts)} grid points (expected >= 5)")
+    optima = isoflop_optima(points, sigma)
     exps = scaling_exponents(optima)
     print(f"seed noise sigma = {sigma:.4f} nats")
     for o in optima:

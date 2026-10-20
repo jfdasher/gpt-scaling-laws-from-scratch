@@ -23,15 +23,19 @@ INIT_GRID = {"a": (0, 5, 10, 15, 20), "b": (0, 5, 10, 15, 20), "e": (-1, 0, 1),
              "alpha": (0.25, 0.5, 1.0, 1.5), "beta": (0.25, 0.5, 1.0, 1.5)}
 
 
-def _huber(r, delta):
-    a = np.abs(r)
-    return np.where(a <= delta, 0.5 * r**2, delta * (a - 0.5 * delta))
-
-
 def _objective(theta, ln_n, ln_d, ln_l, delta):
+    """Huber loss on log residuals, scaled by 1/delta so its magnitude is O(n). Returns (value, gradient)."""
     a, b, e, alpha, beta = theta
-    pred = logsumexp(np.stack([a - alpha * ln_n, b - beta * ln_d, np.full_like(ln_n, e)]), axis=0)
-    return float(_huber(pred - ln_l, delta).sum())
+    terms = np.stack([a - alpha * ln_n, b - beta * ln_d, np.full_like(ln_n, e)])
+    pred = logsumexp(terms, axis=0)
+    r = pred - ln_l
+    small = np.abs(r) <= delta
+    value = float(np.where(small, 0.5 * r**2 / delta, np.abs(r) - 0.5 * delta).sum())
+    g = np.where(small, r / delta, np.sign(r))
+    w = np.exp(terms - pred)  # softmax weights, shape (3, n)
+    grad = np.array([(g * w[0]).sum(), (g * w[1]).sum(), (g * w[2]).sum(),
+                     (-g * w[0] * ln_n).sum(), (-g * w[1] * ln_d).sum()])
+    return value, grad
 
 
 def _params(theta) -> dict:
@@ -40,16 +44,21 @@ def _params(theta) -> dict:
             "a_implied": beta / (alpha + beta), "theta": [a, b, e, alpha, beta]}
 
 
-def fit(N, D, L, inits=None, delta: float = HUBER_DELTA) -> dict:
+def fit(N, D, L, inits=None, delta: float = HUBER_DELTA, keep: int = 20) -> dict:
+    """Screen every start by objective value, then run L-BFGS-B from the best `keep` only."""
     ln_n, ln_d, ln_l = np.log(N), np.log(D), np.log(L)
     inits = inits if inits is not None else list(itertools.product(*INIT_GRID.values()))
+    args = (ln_n, ln_d, ln_l, delta)
+    starts = sorted(inits, key=lambda x0: _objective(np.array(x0, float), *args)[0])[:keep]
     best = None
-    for x0 in inits:
-        res = minimize(_objective, np.array(x0, float), args=(ln_n, ln_d, ln_l, delta), method="L-BFGS-B")
+    for x0 in starts:
+        res = minimize(_objective, np.array(x0, float), args=args, jac=True, method="L-BFGS-B",
+                       options={"maxiter": 2000, "ftol": 1e-12, "gtol": 1e-9})
         if best is None or res.fun < best.fun:
             best = res
     out = _params(best.x)
     out["objective"] = float(best.fun)
+    out["converged"] = bool(best.success)
     return out
 
 
@@ -60,7 +69,7 @@ def bootstrap(N, D, L, full: dict, n_boot: int = 1000, seed: int = 0) -> list[di
     out = []
     for _ in range(n_boot):
         idx = rng.integers(0, len(N), len(N))
-        out.append(fit(N[idx], D[idx], L[idx], inits=inits))
+        out.append(fit(N[idx], D[idx], L[idx], inits=inits, keep=5))
     return out
 
 
