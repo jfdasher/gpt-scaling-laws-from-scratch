@@ -26,7 +26,7 @@ SEED1_OFFSET = 1_000_000_000
 TEST_BUDGET = 3e17
 SMOKE_PREEMPT_STEP = 100
 # (budget, tokens/param, centre LR, number of LRs); the first two are the rule's ends, the third is the check
-LR_SWEEP = ((3e15, 80.0, 4e-3, 5), (3e16, 5.0, 2e-3, 5), (1e16, 20.0, 3e-3, 3))
+LR_SWEEP = ((3e15, 80.0, 1.6e-2, 5), (3e16, 5.0, 2e-3, 5), (1e16, 20.0, 6e-3, 3))  # small-end and check centres moved after sweeps hit the upper edge (NOTES.md)
 DYNAMICS_BUDGET, DYNAMICS_RATIO = 3e16, 20.0
 DIAG_EVERY = 20  # per-layer diagnostics cadence for the instability configs
 DEFAULT_FLOPS_PER_S = 7e13  # until bench.json exists
