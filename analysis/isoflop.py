@@ -17,7 +17,9 @@ from analysis.common import grid_run_ids, load_results
 
 
 def _is_grid(r, run_ids) -> bool:
-    return r.get("phase") == "grid" and (run_ids is None or r.get("run_id") in run_ids)
+    if run_ids is not None:  # membership by code: a reused run (e.g. dyn/batch32k) counts whatever its phase label
+        return r.get("run_id") in run_ids
+    return r.get("phase") == "grid"
 
 
 def grid_points(results, run_ids: set[str] | None = None) -> dict[float, list[tuple[float, float]]]:

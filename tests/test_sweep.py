@@ -38,6 +38,11 @@ def test_grid_v2_1e17_run_ids_equal_v1():
     assert not v1_small & {run_id(c) for c in sweep.grid_configs(RULE)}
 
 
+def test_reused_dyn_batch32k_is_in_grid_v2():
+    by_name = {c.name: c for c in sweep.dynamics_configs(RULE)}
+    assert run_id(by_name["dyn/batch32k"]) in {run_id(c) for c in sweep.grid_configs(RULE)}
+
+
 def test_lr_configs():
     cfgs = sweep.lr_configs()
     assert len(cfgs) == 13

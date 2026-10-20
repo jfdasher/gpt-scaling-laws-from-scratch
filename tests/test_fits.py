@@ -129,10 +129,25 @@ def test_run_ids_filter_excludes_other_runs():
     assert isoflop.seed_sigma(res, run_ids={r["run_id"] for r in res}) == isoflop.seed_sigma(res)
 
 
-def test_grid_run_ids_versions():
+def test_grid_run_ids_versions(tmp_path):
     from analysis.common import grid_run_ids
-    assert len(grid_run_ids("v2", "lr_rule.json")) == 25 and len(grid_run_ids("v1", "lr_rule.json")) == 25
-    assert grid_run_ids("v1", "lr_rule.json") != grid_run_ids("v2", "lr_rule.json")
+    rule = tmp_path / "lr_rule.json"
+    rule.write_text(json.dumps({"c0": math.log(3e-3) + 0.3 * math.log(2.5e6), "c1": -0.3}))
+    v1, v2 = grid_run_ids("v1", str(rule)), grid_run_ids("v2", str(rule))
+    assert len(v1) == 25 and len(v2) == 25 and v1 != v2
+
+
+def test_run_ids_selects_reused_run_of_other_phase():
+    res = synthetic_results(noise=1e-4)
+    target = next(r for r in res if r["budget_flops"] == 1e16)
+    reused = dict(target, phase="dynamics", name="dyn/x")
+    others = [r for r in res if r is not target]
+    ids = {r["run_id"] for r in res}
+    base_pts, base_runs = isoflop.grid_points(res, ids), isoflop.grid_runs(res, ids)
+    pts, runs = isoflop.grid_points(others + [reused], ids), isoflop.grid_runs(others + [reused], ids)
+    assert pts[1e16] == base_pts[1e16] and len(pts[1e16]) == len(base_pts[1e16])
+    assert all(np.array_equal(a, b) for a, b in zip(runs, base_runs))
+    assert len(isoflop.grid_points(others + [reused])[1e16]) == len(base_pts[1e16]) - 1  # no run_ids: phase filter applies
 
 
 def _prediction(tmp_path, **kw):
