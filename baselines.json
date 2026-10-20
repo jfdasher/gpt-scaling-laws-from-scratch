@@ -1,0 +1,21 @@
+{
+  "uniform": {
+    "loss_nats": 9.010913347279288,
+    "bpb": 3.358067879653335
+  },
+  "unigram": {
+    "loss_nats": 7.296860554226856,
+    "bpb": 2.7192973792004183
+  },
+  "bigram": {
+    "loss_nats": 5.189693230659838,
+    "bpb": 1.9340261604441105,
+    "lambda": 0.95
+  },
+  "counted_train_tokens": 200000000,
+  "val_bin_sha256": "bfc753c6972c655dca50cda2235dc426ec5fa908e840aa8ca3059e719c1133cc",
+  "gpt2_small": {
+    "bpb": 1.0358261764831005,
+    "note": "GPT-2 tokenizer; reference only"
+  }
+}
