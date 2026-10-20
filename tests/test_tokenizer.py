@@ -76,3 +76,16 @@ def test_merge_val_shards(tmp_path):
     assert np.fromfile(tmp_path / "val.bin", dtype=np.uint16).tolist() == [1, 0, 5, 6, 0, 2, 3, 4, 0]
     with pytest.raises(tk.InsufficientData):
         tk.merge_val_shards(shards, tmp_path / "v2.bin", min_tokens=100)
+
+
+def test_literal_eot_in_text_is_plain_text():
+    tok = _toy_tokenizer()
+    text = "x <|endoftext|> y"
+    # Only the doc ids we control: pick a doc id that lands in train.
+    doc_id = next(f"id-{i}" for i in range(10_000) if not tk.is_val_doc(f"id-{i}"))
+    train, val = tk.encode_file_docs(tok, iter([(doc_id, text)]), seed=0)
+    assert val == []
+    assert int((train == 0).sum()) == 1
+    assert train[-1] == 0
+    assert tok.decode(train[:-1].tolist()) == text
+    assert tok.encode_special_tokens is False  # restored after encoding

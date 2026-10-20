@@ -62,11 +62,16 @@ def encode_file_docs(tok: Tokenizer, docs: Iterable[tuple[str, str]], seed: int)
                 train_docs.append(arr)
         batch.clear()
 
-    for doc in docs:
-        batch.append(doc)
-        if len(batch) >= ENCODE_BATCH:
-            flush()
-    flush()
+    prev_special = tok.encode_special_tokens
+    tok.encode_special_tokens = True  # a literal EOT string in text is plain bytes; only our appended EOT is special
+    try:
+        for doc in docs:
+            batch.append(doc)
+            if len(batch) >= ENCODE_BATCH:
+                flush()
+        flush()
+    finally:
+        tok.encode_special_tokens = prev_special
     order = np.random.default_rng(seed).permutation(len(train_docs))
     train = np.concatenate([train_docs[i] for i in order]) if train_docs else np.zeros(0, np.uint16)
     val_docs.sort(key=lambda v: v[0])
