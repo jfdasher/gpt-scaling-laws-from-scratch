@@ -15,13 +15,14 @@ from pathlib import Path
 
 import numpy as np
 
-from gptlab.flops import BATCH_TOKENS, H100_DOLLARS_PER_HOUR, choose_shape, param_count, size_for_budget
+from gptlab.flops import BATCH_TOKENS, SEQ_LEN, H100_DOLLARS_PER_HOUR, choose_shape, param_count, size_for_budget
 from gptlab.train import TrainConfig, run_id
 
 PHASES = ("smoke", "lr", "grid", "dynamics", "dynamics-fix", "probe", "test")
 GRID_BUDGETS = (3e15, 1e16, 3e16, 1e17)
 GRID_RATIOS = (5.0, 10.0, 20.0, 40.0, 80.0)
 GRID_EXTRA_RATIOS: dict[float, tuple[float, ...]] = {}  # phase-3 gate, e.g. {1e17: (160.0,)}
+GRID_BATCH = {3e15: 16384, 1e16: 32768, 3e16: 32768, 1e17: 65536}  # batch tokens per budget; grid v1 (64k everywhere) was step-starved at small budgets (NOTES.md)
 SEED1_OFFSET = 1_000_000_000
 TEST_BUDGET = 3e17
 SMOKE_PREEMPT_STEP = 100
@@ -68,23 +69,35 @@ def lr_configs() -> list[TrainConfig]:
     ]
 
 
-def grid_configs(rule) -> list[TrainConfig]:
+def _grid(rule, batch_for) -> list[TrainConfig]:
     out = []
     for budget in GRID_BUDGETS:
+        bt = batch_for(budget)
+        kw = dict(batch_tokens=bt, micro_batch=min(64, bt // SEQ_LEN), tag="grid")
         for ratio in GRID_RATIOS + GRID_EXTRA_RATIOS.get(budget, ()):
-            s = size_for_budget(budget, ratio)
+            s = size_for_budget(budget, ratio, bt)
             lr = lr_for(s.n_params, rule)
-            out.append(make_config("grid", f"grid/{budget:.0e}/r{ratio:g}", budget, ratio, lr, tag="grid"))
+            out.append(make_config("grid", f"grid/{budget:.0e}/r{ratio:g}", budget, ratio, lr, **kw))
             if budget == GRID_BUDGETS[0]:
                 out.append(
-                    make_config("grid", f"grid/{budget:.0e}/r{ratio:g}/seed1", budget, ratio, lr, seed=1, data_offset=SEED1_OFFSET, tag="grid")
+                    make_config("grid", f"grid/{budget:.0e}/r{ratio:g}/seed1", budget, ratio, lr, seed=1, data_offset=SEED1_OFFSET, **kw)
                 )
     return out
 
 
+def grid_configs(rule) -> list[TrainConfig]:
+    """Grid v2: batch size per budget (GRID_BATCH)."""
+    return _grid(rule, GRID_BATCH.__getitem__)
+
+
+def grid_v1_configs(rule) -> list[TrainConfig]:
+    """Grid v1: 64k-token batch at every budget. Kept only to report the failed grid."""
+    return _grid(rule, lambda budget: BATCH_TOKENS)
+
+
 def dynamics_base(rule) -> TrainConfig:
-    s = size_for_budget(DYNAMICS_BUDGET, DYNAMICS_RATIO)
-    return make_config("dynamics", "dyn/baseline", DYNAMICS_BUDGET, DYNAMICS_RATIO, lr_for(s.n_params, rule), tag="grid")
+    v1 = {c.name: c for c in grid_v1_configs(rule)}[f"grid/{DYNAMICS_BUDGET:.0e}/r{DYNAMICS_RATIO:g}"]
+    return replace(v1, name="dyn/baseline", phase="dynamics")
 
 
 def dynamics_configs(rule) -> list[TrainConfig]:

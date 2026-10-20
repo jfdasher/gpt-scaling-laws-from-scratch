@@ -34,3 +34,13 @@ def load_diag(results_dir, run_id: str) -> list[dict]:
         r = json.loads(line)
         rows[r["step"]] = r
     return [rows[s] for s in sorted(rows)]
+
+
+def grid_run_ids(version: str = "v2", lr_rule: str = "lr_rule.json") -> set[str]:
+    """Run ids of the grid as defined by code (sweep.py), so analysis does not depend on the `phase` label alone."""
+    import sweep
+    from gptlab.train import run_id
+
+    rule = sweep.load_lr_rule(lr_rule)
+    cfgs = sweep.grid_v1_configs(rule) if version == "v1" else sweep.grid_configs(rule)
+    return {run_id(c) for c in cfgs}

@@ -1,43 +1,47 @@
 """IsoFLOP method (Chinchilla approach 2): parabola in ln N per budget, then power laws in C.
 
-    uv run python -m analysis.isoflop results
+    uv run python -m analysis.isoflop results [--grid v1|v2]
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
-import sys
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 
-from analysis.common import load_results
+from analysis.common import grid_run_ids, load_results
 
 
-def grid_points(results) -> dict[float, list[tuple[float, float]]]:
+def _is_grid(r, run_ids) -> bool:
+    return r.get("phase") == "grid" and (run_ids is None or r.get("run_id") in run_ids)
+
+
+def grid_points(results, run_ids: set[str] | None = None) -> dict[float, list[tuple[float, float]]]:
     """budget -> sorted [(N, seed-averaged loss)]."""
     groups: dict = defaultdict(lambda: defaultdict(list))
     for r in results:
-        if r.get("phase") == "grid":
+        if _is_grid(r, run_ids):
             groups[r["budget_flops"]][r["n_params"]].append(r["val_loss"])
     return {b: sorted((n, float(np.mean(ls))) for n, ls in by_n.items()) for b, by_n in groups.items()}
 
 
-def grid_runs(results) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def grid_runs(results, run_ids: set[str] | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(N, D, L) arrays, seed-averaged, for the parametric fit."""
     groups: dict = defaultdict(list)
     for r in results:
-        if r.get("phase") == "grid":
+        if _is_grid(r, run_ids):
             groups[(r["n_params"], r["tokens"])].append(r["val_loss"])
     keys = sorted(groups)
     return (np.array([k[0] for k in keys], float), np.array([k[1] for k in keys], float),
             np.array([np.mean(groups[k]) for k in keys]))
 
 
-def seed_sigma(results) -> float:
-    by_name = {r["name"]: r["val_loss"] for r in results if r.get("phase") == "grid"}
+def seed_sigma(results, run_ids: set[str] | None = None) -> float:
+    by_name = {r["name"]: r["val_loss"] for r in results if _is_grid(r, run_ids)}
     diffs = [by_name[n] - by_name[n + "/seed1"] for n in by_name if n + "/seed1" in by_name]
     if not diffs:
         raise ValueError("no seed pairs found in grid results")
@@ -105,10 +109,17 @@ def public(d: dict) -> dict:
     return {k: v for k, v in d.items() if not k.startswith("_")}
 
 
-def main(results_dir="results") -> None:
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("results", nargs="?", default="results")
+    ap.add_argument("--grid", choices=("v1", "v2"), default="v2")
+    ap.add_argument("--lr-rule", default="lr_rule.json")
+    args = ap.parse_args(argv)
+    results_dir = args.results
+    ids = grid_run_ids(args.grid, args.lr_rule)
     res = load_results(results_dir)
-    sigma = seed_sigma(res)
-    points = grid_points(res)
+    sigma = seed_sigma(res, ids)
+    points = grid_points(res, ids)
     for budget, pts in sorted(points.items()):
         if len(pts) < 5:
             print(f"WARNING: budget {budget:.0e} has {len(pts)} grid points (expected >= 5)")
@@ -120,9 +131,9 @@ def main(results_dir="results") -> None:
               f"tok/param={o['tokens_per_param']:.1f} L_min={o['loss_min']:.4f} {'ok' if o['interior'] else 'EDGE'}")
     print(f"a = {exps['a']:.3f} [{exps['a_lo']:.3f}, {exps['a_hi']:.3f}]  b = {exps['b']:.3f}  ({exps['note']})")
     out = {"sigma": sigma, "optima": [public(o) for o in optima], "exponents": public(exps)}
-    Path(results_dir, "fits").mkdir(exist_ok=True)
-    Path(results_dir, "fits", "isoflop.json").write_text(json.dumps(out, indent=2))
+    Path(results_dir, "fits").mkdir(parents=True, exist_ok=True)
+    Path(results_dir, "fits", "isoflop.json" if args.grid == "v2" else "isoflop_v1.json").write_text(json.dumps(out, indent=2))
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:])
+    main()

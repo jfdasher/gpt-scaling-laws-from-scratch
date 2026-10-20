@@ -117,6 +117,24 @@ def test_non_grid_phases_ignored():
         assert np.array_equal(a, b)
 
 
+def test_run_ids_filter_excludes_other_runs():
+    res = synthetic_results(noise=1e-4)
+    keep = {r["run_id"] for r in res if r["budget_flops"] != 3e15}
+    pts = isoflop.grid_points(res, run_ids=keep)
+    assert 3e15 not in pts and set(pts) == set(isoflop.grid_points(res)) - {3e15}
+    N, D, L = isoflop.grid_runs(res, run_ids=keep)
+    assert len(N) < len(isoflop.grid_runs(res)[0])
+    with pytest.raises(ValueError):
+        isoflop.seed_sigma(res, run_ids=keep)  # seed pairs exist only at 3e15
+    assert isoflop.seed_sigma(res, run_ids={r["run_id"] for r in res}) == isoflop.seed_sigma(res)
+
+
+def test_grid_run_ids_versions():
+    from analysis.common import grid_run_ids
+    assert len(grid_run_ids("v2", "lr_rule.json")) == 25 and len(grid_run_ids("v1", "lr_rule.json")) == 25
+    assert grid_run_ids("v1", "lr_rule.json") != grid_run_ids("v2", "lr_rule.json")
+
+
 def _prediction(tmp_path, **kw):
     rule = (math.log(3e-3) + 0.3 * math.log(2.5e6), -0.3)
     return predict.make_prediction(synthetic_results(noise=1e-4), rule, n_boot=20, **kw)

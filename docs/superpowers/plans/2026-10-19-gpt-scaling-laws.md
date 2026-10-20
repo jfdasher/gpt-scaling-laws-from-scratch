@@ -37,7 +37,7 @@
 - Llama-style architecture (RMSNorm, RoPE, SwiGLU, no biases, tied embeddings).
 - Code structure: a plain PyTorch package plus a thin Modal layer.
 - Training-dynamics track included in full (instability, warmup, β₂, batch size).
-- 64k-token batch for the grid and test runs.
+- Batch: per budget for the grid (3e15 16k, 1e16 32k, 3e16 32k, 1e17 64k; see correction 6); 64k tokens for the test run.
 - Modal: H100 for every GPU run; $60 workspace spend limit.
 
 **Corrections to the spec made while planning (binding):**
@@ -46,6 +46,7 @@
 3. **The isoflop exponents satisfy b = 1 − a exactly,** because D_opt = C/(6·N_opt). The analysis reports b and notes the identity.
 4. **The exact parameter count is** N = L·(4d² + 3·d·h + 2d) + d + V·d, with h = `ffn_hidden(d)` = 64·round(8d/192). The 12·L·d² figure is only an approximation.
 5. **The GPU smoke resume check compares per-step losses within a tolerance, not exactly.** GPU kernels aren't bitwise deterministic. The exact check is the CPU resume test (Task 8).
+6. **Grid batch is per budget (3e15 16k, 1e16 32k, 3e16 32k, 1e17 64k)** after grid v1 (64k everywhere) proved step-starved at small budgets; see NOTES.md.
 
 ---
 

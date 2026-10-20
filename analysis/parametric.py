@@ -1,14 +1,14 @@
 """Parametric fit L(N, D) = E + A/N^alpha + B/D^beta (Hoffmann et al. approach 3), with run-level bootstrap.
 
-    uv run python -m analysis.parametric results
+    uv run python -m analysis.parametric results [--grid v1|v2]
 """
 
 from __future__ import annotations
 
+import argparse
 import itertools
 import json
 import math
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +16,7 @@ from scipy.optimize import minimize
 from scipy.special import logsumexp
 
 from analysis import isoflop
-from analysis.common import load_results
+from analysis.common import grid_run_ids, load_results
 
 HUBER_DELTA = 1e-3
 INIT_GRID = {"a": (0, 5, 10, 15, 20), "b": (0, 5, 10, 15, 20), "e": (-1, 0, 1),
@@ -89,8 +89,14 @@ def interval(values) -> tuple[float, float]:
     return float(lo), float(hi)
 
 
-def main(results_dir="results") -> None:
-    N, D, L = isoflop.grid_runs(load_results(results_dir))
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("results", nargs="?", default="results")
+    ap.add_argument("--grid", choices=("v1", "v2"), default="v2")
+    ap.add_argument("--lr-rule", default="lr_rule.json")
+    args = ap.parse_args(argv)
+    results_dir = args.results
+    N, D, L = isoflop.grid_runs(load_results(results_dir), grid_run_ids(args.grid, args.lr_rule))
     full = fit(N, D, L)
     boots = bootstrap(N, D, L, full)
     summary = {"fit": full}
@@ -98,9 +104,9 @@ def main(results_dir="results") -> None:
         lo, hi = interval([b[k] for b in boots])
         summary[k] = {"value": full[k], "lo": lo, "hi": hi}
         print(f"{k:10} {full[k]:.4g} [{lo:.4g}, {hi:.4g}]")
-    Path(results_dir, "fits").mkdir(exist_ok=True)
-    Path(results_dir, "fits", "parametric.json").write_text(json.dumps(summary, indent=2))
+    Path(results_dir, "fits").mkdir(parents=True, exist_ok=True)
+    Path(results_dir, "fits", "parametric.json" if args.grid == "v2" else "parametric_v1.json").write_text(json.dumps(summary, indent=2))
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:])
+    main()

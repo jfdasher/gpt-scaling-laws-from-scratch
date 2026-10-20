@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from analysis import isoflop, parametric
-from analysis.common import load_results
+from analysis.common import grid_run_ids, load_results
 from gptlab.train import TrainConfig, run_id
 from gptlab.flops import param_count
 
@@ -34,10 +34,11 @@ def check_data_budget(tokens: int, manifest_path=DATA_MANIFEST) -> None:
         raise ValueError(f"declared run needs {tokens + 1:,} train tokens but {path} has only {have:,}")
 
 
-def make_prediction(results, rule, budget: float = TEST_BUDGET, n_boot: int = 1000, manifest_path=DATA_MANIFEST) -> dict:
+def make_prediction(results, rule, budget: float = TEST_BUDGET, n_boot: int = 1000, manifest_path=DATA_MANIFEST,
+                    run_ids: set[str] | None = None) -> dict:
     import sweep
 
-    optima = isoflop.isoflop_optima(isoflop.grid_points(results), isoflop.seed_sigma(results), n_boot)
+    optima = isoflop.isoflop_optima(isoflop.grid_points(results, run_ids), isoflop.seed_sigma(results, run_ids), n_boot)
     exps = isoflop.scaling_exponents(optima)
     n_iso, n_lo, n_hi = isoflop.predict_n_opt(exps, budget)
     cfg = sweep.declared_test_config(n_iso, rule, budget)
@@ -45,12 +46,12 @@ def make_prediction(results, rule, budget: float = TEST_BUDGET, n_boot: int = 10
     d_decl = cfg.total_steps * cfg.batch_tokens
     check_data_budget(d_decl, manifest_path)
 
-    N, D, L = isoflop.grid_runs(results)
+    N, D, L = isoflop.grid_runs(results, run_ids)
     full = parametric.fit(N, D, L)
     boots = parametric.bootstrap(N, D, L, full, n_boot=n_boot)
     n_par, d_par = parametric.optimal_allocation(full, budget)
     n_par_lo, n_par_hi = parametric.interval([parametric.optimal_allocation(b, budget)[0] for b in boots])
-    sigma = isoflop.seed_sigma(results)
+    sigma = isoflop.seed_sigma(results, run_ids)
     mean_losses = [parametric.predicted_loss(b, n_decl, d_decl) for b in boots]
     loss_lo, loss_hi = parametric.interval(mean_losses)
     noise = np.random.default_rng(0).normal(0, sigma, len(mean_losses))
@@ -121,7 +122,8 @@ def main(argv=None) -> None:
     c.add_argument("--force", action="store_true")
     args = ap.parse_args(argv)
     if args.cmd == "make":
-        p = make_prediction(load_results(args.results), sweep.load_lr_rule(args.lr_rule))
+        p = make_prediction(load_results(args.results), sweep.load_lr_rule(args.lr_rule),
+                            run_ids=grid_run_ids("v2", args.lr_rule))
         p["git_commit"] = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         write_prediction(p, args.out, args.force)
         print(json.dumps({k: p[k] for k in ("isoflop", "declared", "predicted_loss")}, indent=2))
