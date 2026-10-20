@@ -164,7 +164,7 @@ def bench_remote(shapes: list[tuple[int, int]]) -> list[dict]:
     try:
         return [benchmark(L, d, DATA_DIR) for L, d in shapes]
     finally:
-        inductor_vol.commit()
+        _commit_inductor()
 
 
 @app.local_entrypoint()
@@ -179,8 +179,15 @@ def bench():
 
 # ---------- training (GPU) ----------
 
+def _commit_inductor() -> None:
+    try:
+        inductor_vol.commit()
+    except Exception as e:  # never mask the real outcome of the run
+        print(f"WARNING: inductor cache commit failed: {e!r}")
+
+
 def _train_impl(cfg_dict: dict, preempt_at_step: int | None, git_commit: str | None) -> dict:
-    from gptlab.train import TrainConfig, WandbLogger, run_id, train
+    from gptlab.train import NonFiniteLoss, RunFailed, TrainConfig, WandbLogger, run_id, train
 
     ckpt_vol.reload()
     cfg = TrainConfig(**cfg_dict)
@@ -188,8 +195,11 @@ def _train_impl(cfg_dict: dict, preempt_at_step: int | None, git_commit: str | N
     try:
         return train(cfg, run_dir, DATA_DIR, logger=WandbLogger(WANDB_PROJECT, cfg), commit=ckpt_vol.commit,
                      preempt_at_step=preempt_at_step, git_commit=git_commit)
+    except (NonFiniteLoss, RunFailed) as e:
+        # deterministic failure: return (don't raise) so Modal doesn't burn retries on it
+        return {"failed": True, "run_id": run_id(cfg), "name": cfg.name, "error": repr(e)}
     finally:
-        inductor_vol.commit()
+        _commit_inductor()
 
 
 TRAIN_KW = dict(
@@ -218,6 +228,22 @@ def _git_commit() -> str:
     return sha + ("-dirty" if dirty else "")
 
 
+@app.function(image=image, timeout=24 * 3600)
+def run_phase(args: list[tuple[dict, int | None, str]], long: bool) -> list[str]:
+    fn = train_long if long else train_one
+    summaries = []
+    for res in fn.starmap(args, return_exceptions=True, order_outputs=False):
+        if isinstance(res, BaseException):
+            line = f"FAILED: {res!r}"
+        elif res.get("failed"):
+            line = f"FAILED: {res['name']} {res['run_id']} {res['error']}"
+        else:
+            line = f"done {res['name']} {res['run_id']} val_loss={res['val_loss']:.4f} ${res['cost_usd']:.2f}"
+        print(line)
+        summaries.append(line)
+    return summaries
+
+
 @app.local_entrypoint()
 def launch(phase: str, yes: bool = False, from_run: str = "", lr_rule: str = "lr_rule.json",
            prediction: str = "predictions/3e17.json"):
@@ -232,13 +258,11 @@ def launch(phase: str, yes: bool = False, from_run: str = "", lr_rule: str = "lr
         print("dry run: nothing launched. Re-run with --yes to launch.")
         return
     commit = _git_commit()
-    fn = train_long if phase == "test" else train_one
     args = [(asdict(c), sweep.SMOKE_PREEMPT_STEP if c.tag == "preempt" else None, commit) for c in todo]
-    for res in fn.starmap(args, return_exceptions=True, order_outputs=False):
-        if isinstance(res, BaseException):
-            print("FAILED:", repr(res))
-        else:
-            print(f"done {res['name']} {res['run_id']} val_loss={res['val_loss']:.4f} ${res['cost_usd']:.2f}")
+    # Orchestration runs server-side: `modal run --detach` keeps only the last triggered call alive, and
+    # starmap input retries are client-side, so a client-side starmap would die with the disconnect.
+    for line in run_phase.remote(args, phase == "test"):
+        print(line)
 
 
 # ---------- results and publishing ----------
