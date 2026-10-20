@@ -1,0 +1,78 @@
+{
+  "created_utc": "2026-10-20T19:45:56.734507+00:00",
+  "budget": 3e+17,
+  "seed_sigma": 0.08534294724785654,
+  "isoflop": {
+    "n_opt": 57063471.6363881,
+    "n_opt_lo": 10548465.037063302,
+    "n_opt_hi": 1209959995.4563315,
+    "d_opt": 876217281.671943,
+    "a": 0.5454192541644244,
+    "a_lo": 0.12007518576183399,
+    "a_hi": 1.6645476166152187
+  },
+  "parametric": {
+    "n_opt": 56279857.218752496,
+    "n_opt_lo": 31434104.641245257,
+    "n_opt_hi": 139855586.6207297,
+    "d_opt": 888417321.4167281,
+    "params": {
+      "E": 2.7158640777569496,
+      "A": 773.321970814454,
+      "B": 35347.936144962165,
+      "alpha": 0.4574712206363921,
+      "beta": 0.594427284250412,
+      "a_implied": 0.5650994668106111
+    }
+  },
+  "declared_config": {
+    "name": "test/3e+17",
+    "n_layer": 17,
+    "d_model": 512,
+    "total_steps": 13354,
+    "peak_lr": 0.00122,
+    "phase": "test",
+    "tag": "",
+    "batch_tokens": 65536,
+    "micro_batch": 64,
+    "seq_len": 512,
+    "vocab_size": 8192,
+    "warmup_frac": 0.05,
+    "final_lr_frac": 0.1,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "weight_decay": 0.1,
+    "grad_clip": 1.0,
+    "qk_norm": false,
+    "z_loss": 0.0,
+    "seed": 0,
+    "data_offset": 0,
+    "log_every": 10,
+    "eval_every": null,
+    "eval_tokens": 1048576,
+    "ckpt_every_s": 600.0,
+    "compile": true,
+    "budget_flops": 3e+17,
+    "tokens_per_param": 15.318200148762848,
+    "diag_every": null
+  },
+  "declared": {
+    "n_params": 57132544,
+    "tokens": 875167744,
+    "rule": "isoflop N_opt snapped to a shape"
+  },
+  "predicted_loss": {
+    "parametric": {
+      "value": 3.105522532152891,
+      "param_lo": 3.0319525175202005,
+      "param_hi": 3.1925443684481385,
+      "pred_lo": 2.9233481385416047,
+      "pred_hi": 3.2713476306035356
+    },
+    "isoflop_frontier": {
+      "value": 3.008082508569027,
+      "note": "point estimate, no interval"
+    }
+  },
+  "git_commit": "fcbe6e7f6c4926d575d40dbada462785fd717bd9"
+}

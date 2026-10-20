@@ -51,3 +51,10 @@ Format: `## YYYY-MM-DD — short title`, then what happened, how it was diagnose
   - 1e17: 29.7M (19), unchanged.
 - Exponent a: v1 0.747 → v2 **0.545**, against Chinchilla's ~0.5. The v1 bias went the predicted direction: step starvation penalised the large-N points most, which pushed N_opt down at small C and steepened a.
 - Seed noise σ = 0.085 nats, but it is dominated by one pair: 3e15/r5 (10M params, 5 tok/param) at 4.270 vs 4.019. r10 differs by 0.098; r20, r40 and r80 by 0.0005, 0.016 and 0.004. The r5 gap isn't instability (max grad norm 5.8, no attention blow-up). Train-loss bumps of ~0.2 appear at identical steps in runs reading the same data region (2335 for seed-0 runs, 4259 for seed-1), so they are data-driven. I'm keeping the pre-registered estimator (RMS over all pairs) rather than switching to a robust one after seeing the data. The isoflop intervals on a (0.12–1.67) are therefore wide and probably pessimistic for the larger budgets.
+
+## 2026-10-20 — Fits and pre-registered 3e17 prediction
+- Isoflop (grid v2): a = 0.545 [0.120, 1.665], b = 0.455. Parametric: a_implied = 0.565 [0.144, 0.881], α = 0.458, β = 0.594, E = 2.716 [~0, 3.004]. **The two methods agree on a** (0.545 vs 0.565), and both are near Chinchilla's ~0.5. The parametric parameter intervals are very wide (E spans ~0–3.0): with ~21 points over a 33× compute range, E/A/B trade off against each other. This matches Besiroglu et al. (2024).
+- Each run of the parametric bootstrap (1,000 resamples) takes ~30 min on 10 cores locally; `predict make` runs it again.
+- **Prediction for C = 3e17**, committed and tagged before any test run:
+  - Isoflop N_opt = 57.1M [10.5M, 1.21B]. Declared run: 17 layers × 512 (57,132,544 params), 875M tokens (15.3 tok/param), LR 1.22e-3 from the rule.
+  - Predicted val loss: parametric 3.106 (parameter interval 3.032–3.193; prediction interval incl. seed noise 2.923–3.271); isoflop-frontier extrapolation 3.008 (point estimate).
