@@ -1,0 +1,16 @@
+{
+  "dataset": "HuggingFaceFW/fineweb-edu",
+  "files": [
+    "sample/10BT/001_00000.parquet",
+    "sample/10BT/010_00000.parquet",
+    "sample/10BT/009_00000.parquet",
+    "sample/10BT/005_00000.parquet"
+  ],
+  "n_bytes": 38714193,
+  "n_docs": 8116,
+  "n_tokens": 10000376,
+  "tokenizer_sha256": "e3c6d66ba2284be39f6ffec8110045328d3958667026e9ca505fbeed6e56322c",
+  "train_tokens": 2655647914,
+  "val_bin_sha256": "bfc753c6972c655dca50cda2235dc426ec5fa908e840aa8ca3059e719c1133cc",
+  "val_per_mille": 5
+}
