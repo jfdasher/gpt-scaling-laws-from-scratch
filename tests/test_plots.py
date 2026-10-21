@@ -17,7 +17,8 @@ def test_plots_write_files(tmp_path):
     paths = [
         plots.plot_isoflop(optima, tmp_path / "isoflop.png"),
         plots.plot_optima(optima, exps, tmp_path / "optima.png", predicted=(3e17, 1e7), actual=(3e17, 1.1e7)),
-        plots.plot_frontier(optima, tmp_path / "frontier.png", predicted=(3e17, 3.7), actual=(3e17, 3.72)),
+        plots.plot_frontier(optima, tmp_path / "frontier.png", predicted=(3e17, 3.7), actual=(3e17, 3.72),
+                            parametric=(3e17, 3.75, 3.6, 3.9)),
         plots.plot_tokens_per_param(optima, tmp_path / "tpp.png"),
         plots.plot_lr_sweep([{"budget": 3e15, "ratio": 80.0, "n_params": 2.5e6, "lrs": [1e-3, 2e-3, 4e-3],
                               "losses": [4.1, 4.0, float("inf")], "best_lr": 2e-3}], tmp_path / "lr.png"),

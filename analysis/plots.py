@@ -15,6 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+from matplotlib.ticker import ScalarFormatter  # noqa: E402
 
 
 def _save(fig, path) -> Path:
@@ -65,20 +66,26 @@ def plot_optima(optima, exps, path, predicted=None, actual=None) -> Path:
     return _save(fig, path)
 
 
-def plot_frontier(optima, path, predicted=None, actual=None) -> Path:
+def plot_frontier(optima, path, predicted=None, actual=None, parametric=None) -> Path:
     c = np.array([o["budget"] for o in optima])
     lmin = np.array([o["loss_min"] for o in optima])
     slope, icpt = np.polyfit(np.log(c), np.log(lmin), 1)
     cs = np.logspace(np.log10(c.min()) - 0.2, np.log10(max(c.max(), predicted[0] if predicted else 0)) + 0.2, 50)
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.plot(c, lmin, "o", label="isoflop minima")
-    ax.plot(cs, np.exp(icpt + slope * np.log(cs)), "-", label=f"L ∝ C^{slope:.3f}")
+    ax.plot(cs, np.exp(icpt + slope * np.log(cs)), "-", color="C7", label=f"L ∝ C^{slope:.3f}")
     if predicted:
-        ax.plot(*predicted, "s", mfc="none", markersize=10, label="predicted 3e17")
+        ax.plot(*predicted, "s", color="C2", mfc="none", markersize=10, label="frontier prediction 3e17")
+    if parametric:  # (C, value, lo, hi): drawn just right of C so it doesn't hide the other markers
+        pc, pv, lo, hi = parametric
+        ax.errorbar(pc * 1.12, pv, yerr=[[pv - lo], [hi - pv]], fmt="D", color="C1", mfc="none", capsize=4,
+                    label="parametric prediction 3e17 (95% PI)")
     if actual:
-        ax.plot(*actual, "s", markersize=7, label="trained 3e17")
+        ax.plot(*actual, "s", color="C3", markersize=7, label="trained 3e17")
     ax.set(xscale="log", yscale="log", xlabel="compute C (FLOPs)", ylabel="best val loss", title="Compute frontier")
-    ax.legend()
+    ax.yaxis.set_major_formatter(ScalarFormatter())
+    ax.yaxis.set_minor_formatter(ScalarFormatter())
+    ax.legend(loc="upper right", fontsize=8)
     return _save(fig, path)
 
 
@@ -195,9 +202,11 @@ def main(results_dir="results", out_dir="figures") -> None:
         a_n = (pred["budget"], pred["declared"]["n_params"]) if pred and outcome else None
         p_l = (pred["budget"], pred["predicted_loss"]["isoflop_frontier"]["value"]) if pred else None
         a_l = (pred["budget"], outcome["actual_val_loss"]) if outcome else None
+        pp = pred["predicted_loss"]["parametric"] if pred else None
+        p_p = (pred["budget"], pp["value"], pp["pred_lo"], pp["pred_hi"]) if pred else None
         plot_isoflop(optima, Path(out_dir, "isoflop.png"))
         plot_optima(optima, exps, Path(out_dir, "optima.png"), predicted=p_n, actual=a_n)
-        plot_frontier(optima, Path(out_dir, "frontier.png"), predicted=p_l, actual=a_l)
+        plot_frontier(optima, Path(out_dir, "frontier.png"), predicted=p_l, actual=a_l, parametric=p_p)
         plot_tokens_per_param(optima, Path(out_dir, "tokens_per_param.png"))
     rule = root / "lr_rule.json"
     if rule.exists():

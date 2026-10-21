@@ -4,27 +4,20 @@ I trained 79 Llama-style GPT runs (2.6M to 57M parameters) on FineWeb-Edu. From 
 
 **TL;DR**
 
-- **Exponent a in N_opt ∝ C^a:** isoflop fit **0.545** [0.120, 1.665]; parametric fit **0.565** [0.144, 0.881]. The two methods agree, and both are close to Chinchilla's ~0.5.
+- **A pre-registered prediction at 3x the largest training budget held.** Before the C = 3e17 run (57.1M params, 875M tokens), I committed and git-tagged two predicted losses: parametric fit 3.106 (95% prediction interval 2.92-3.27) and isoflop frontier 3.008. **Actual: 3.041.** It falls between the two, within 1σ of seed noise of each (-0.76σ and +0.38σ).
+- **Exponent a in N_opt ∝ C^a:** isoflop fit 0.545, parametric fit 0.565. The two methods agree with each other and are consistent with Chinchilla's ~0.5, but neither pins a down: the 95% intervals are [0.120, 1.665] and [0.144, 0.881]. Four budgets over a 33x compute range are not enough. The loss prediction is the sharp result here; the exponent is not.
 - **Tokens per parameter at the optimum:** 25, 20, 16 and 19 at budgets 3e15, 1e16, 3e16 and 1e17 FLOPs.
-- **Pre-registered prediction at C = 3e17** (57.1M params, 875M tokens): parametric 3.106, isoflop frontier 3.008. **Actual: 3.0407.** The parametric prediction landed inside both of its intervals, at -0.76σ of seed noise.
 - **Total cost:** 79 runs, 4.56 GPU-hours, **$18.00**.
 
 Links: [W&B report](https://forge.coreweave.com/wandb/jfdasher-thermopylae-systems/gptlab-scaling/reports/Small-GPT-scaling-laws,-from-scratch--VmlldzoxODE1NDAzMg==) · [HF model (the 3e17 test run)](https://huggingface.co/jfdasher/gptlab-57m-3e17) · [Repo](https://github.com/jfdasher/gpt-scaling-laws-from-scratch)
 
 Only the 57M test-run model is published on Hugging Face. The grid models are described here but not uploaded.
 
-## What happens in a training step
+![Compute frontier with the pre-registered 3e17 predictions and the trained result](figures/frontier.png)
 
-The model ([gptlab/model.py](gptlab/model.py)) is a Llama-style decoder: RoPE, RMSNorm, SwiGLU, tied embeddings, head dim 64 and context 512. Module names mirror HF `LlamaForCausalLM`, so export is a key rename. One optimizer step in [gptlab/train.py](gptlab/train.py) goes like this:
+## Implementation
 
-1. **LR from the schedule** ([L340-L342](gptlab/train.py#L340-L342)). `lr_at` in [gptlab/schedule.py](gptlab/schedule.py) gives linear warmup over 5% of steps, then cosine decay to 10% of peak. The schedule is sized to each run's own length.
-2. **Forward and backward over micro-batches** ([`forward_backward`, L160-L171](gptlab/train.py#L160-L171)). One step is `batch_tokens / (micro_batch * 512)` micro-batches. Each one reads a deterministic slice of the token stream (`step * accum + micro`, which makes resume exact). The forward pass runs under bf16 autocast ([L125-L127](gptlab/train.py#L125-L127)), and the loss is computed in fp32 ([`loss_fn`](gptlab/model.py#L157-L164), with optional z-loss). Each micro-batch backpropagates `total / accum`, so gradients accumulate to the mean over the step. The returned value is the mean plain cross-entropy.
-3. **Non-finite loss guard** ([L344-L350](gptlab/train.py#L344-L350)). A NaN or inf loss writes forensics: the model and optimizer state, the token span and a `FAILED` marker. The run then fails loudly, and Modal does not retry it.
-4. **Clipping** ([L356-L364](gptlab/train.py#L356-L364)). `clip_grad_norm_(..., 1.0)` returns the *pre-clip* norm, which is what gets logged. A non-finite norm is caught *before* `optimizer.step()`, because a NaN clip coefficient would poison every weight. Per-layer gradient norms are also taken pre-clip ([L353](gptlab/train.py#L353)).
-5. **Fused AdamW, then zero_grad** ([L365-L366](gptlab/train.py#L365-L366)). The optimizer ([L130-L134](gptlab/train.py#L130-L134)) is `torch.optim.AdamW(fused=True)`: β = (0.9, 0.95) and weight decay 0.1 on matrices only. Gradients are then zeroed with `set_to_none=True`.
-6. **Checkpoint on a timer** ([L388-L390](gptlab/train.py#L388-L390)). Every 600 s the model, optimizer, step, accumulated GPU seconds and RNG state are written atomically ([L137-L149](gptlab/train.py#L137-L149)) and committed to a Modal volume.
-
-[gptlab/reference.py](gptlab/reference.py) holds a hand-written AdamW (bias-corrected moments, decoupled weight decay) and a hand-written causal attention. They exist to make the mechanics explicit. [tests/test_reference.py](tests/test_reference.py) checks them for parity against `torch.optim.AdamW` and `F.scaled_dot_product_attention`.
+The model ([gptlab/model.py](gptlab/model.py)) is a Llama-style decoder (RoPE, RMSNorm, SwiGLU, tied embeddings, context 512) whose module names mirror HF `LlamaForCausalLM`. The training loop in [gptlab/train.py](gptlab/train.py) is hand-written, with no HF Trainer: bf16 autocast with an fp32 loss, gradient accumulation, pre-clip gradient-norm logging, fused AdamW and a cosine schedule sized to each run. A non-finite loss or gradient norm halts the run with forensics before the optimizer step, and timed atomic checkpoints (including RNG state and data position) make preemption resume exact. [gptlab/reference.py](gptlab/reference.py) holds a hand-written AdamW and causal attention, parity-tested against PyTorch in [tests/test_reference.py](tests/test_reference.py).
 
 ## Data and evaluation protocol
 
@@ -54,7 +47,7 @@ The model ([gptlab/model.py](gptlab/model.py)) is a Llama-style decoder: RoPE, R
 
 **Compute accounting.** C = 6ND, where N is the *total* parameter count, embeddings included (tied, so counted once) ([gptlab/flops.py](gptlab/flops.py)). Attention FLOPs (the QKᵀ and AV terms) are omitted. At seq_len 512 they are a small but nonzero share of compute, larger for the smallest models.
 
-**Run identity and resume.** A run's ID is a SHA-256 of its behaviour-relevant config ([L63-L65](gptlab/train.py#L63-L65)). A run whose `result.json` exists is never retrained, and runs shared between phases (for example the 3e16/r20 baseline) are reused rather than repeated. Modal containers can be preempted. On restart, a run resumes from its last atomic checkpoint, including the RNG state and data position. [tests/test_train.py](tests/test_train.py) checks that resume is exact on CPU in fp32. On Modal, a smoke run was preempted at step 100 of 200, resumed through a Modal retry, and logged every step exactly once. Each result's `git_commit` ends in `-dirty` when untracked or uncommitted local files existed at launch time; runs remain traceable by config and run_id.
+**Run identity and resume.** A run's ID is a SHA-256 of its behaviour-relevant config (`run_id` in [gptlab/train.py](gptlab/train.py)). A run whose `result.json` exists is never retrained, and runs shared between phases (for example the 3e16/r20 baseline) are reused rather than repeated. Modal containers can be preempted. On restart, a run resumes from its last atomic checkpoint, including the RNG state and data position. [tests/test_train.py](tests/test_train.py) checks that resume is exact on CPU in fp32. On Modal, a smoke run was preempted at step 100 of 200, resumed through a Modal retry, and logged every step exactly once. Each result's `git_commit` ends in `-dirty` when untracked or uncommitted local files existed at launch time; runs remain traceable by config and run_id.
 
 ## Scaling results
 
@@ -84,7 +77,6 @@ All four optima are interior. The fit gives **a = 0.545 [0.120, 1.665]** and b =
 
 ![IsoFLOP curves](figures/isoflop.png)
 ![Optima](figures/optima.png)
-![Frontier](figures/frontier.png)
 ![Tokens per parameter](figures/tokens_per_param.png)
 
 **Prediction test at C = 3e17.** [predictions/3e17.json](predictions/3e17.json) was committed and tagged `prediction-3e17` before the test run started. The isoflop fit put N_opt at 57.1M [10.5M, 1.21B], and the parametric fit at 56.3M [31.4M, 140M]. I declared a run of 17 layers × 512 (57,132,544 params) on 875,167,744 tokens (15.3 tokens/param) at LR 1.22e-3 from the rule. Outcome ([predictions/3e17_outcome.json](predictions/3e17_outcome.json)):
