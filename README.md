@@ -111,7 +111,7 @@ These runs all use a 16M-parameter model at 3e16 FLOPs with the rule LR of 3.52e
 | + QK-norm | 3.574 |
 | Tuned baseline (1x LR) | 3.445 |
 
-With QK-norm, the max attention logits stay bounded at ~14-30. z-loss penalises the output softmax normaliser (log Z of the vocabulary logits), not the attention logits, so it cannot reach this failure mode.
+With QK-norm, the max attention logits stay bounded (final 14-28 across layers, peak 36). z-loss penalises the output softmax normaliser (log Z of the vocabulary logits), not the attention logits, so it cannot reach this failure mode.
 
 ![Instability](figures/dyn_instability.png)
 ![Per-layer diagnostics, 10x LR, no clip](figures/dyn_instability_layers_lr10x-noclip.png)
