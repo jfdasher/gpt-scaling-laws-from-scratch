@@ -141,12 +141,54 @@ def plot_layer_diagnostics(rows: list[dict], title: str, path) -> Path:
     return _save(fig, path)
 
 
+_DYN_FIGS = (
+    ("dyn_instability.png", "Instability: LR multiples, clipping and fixes",
+     ("dyn/baseline", "dyn/lr3x", "dyn/lr3x-noclip", "dyn/lr10x", "dyn/lr10x-noclip",
+      "dyn/lr10x-noclip+qknorm", "dyn/lr10x-noclip+zloss")),
+    ("dyn_warmup.png", "Warmup", ("dyn/baseline", "dyn/warmup0", "dyn/warmup1")),
+    ("dyn_beta2.png", "Adam beta2", ("dyn/baseline", "dyn/beta2-0.999")),
+    ("dyn_batch.png", "Batch size at equal tokens and LR",
+     ("dyn/batch32k", "dyn/baseline", "dyn/batch128k", "dyn/batch256k", "dyn/batch512k")),
+)
+_DYN_LAYER_RUNS = ("dyn/lr10x-noclip", "dyn/lr10x-noclip+qknorm", "dyn/lr10x-noclip+zloss", "dyn/lr3x")
+
+
+def dyn_run_ids(results_dir) -> dict[str, str]:
+    """Run name -> run_id for the dynamics runs; dyn/baseline is the grid 3e16/r20 run unless named itself."""
+    from analysis.common import load_failed, load_results
+
+    ids = {r["name"]: r["run_id"] for r in load_results(results_dir) + load_failed(results_dir)}
+    if "dyn/baseline" not in ids and "grid/3e+16/r20" in ids:
+        ids["dyn/baseline"] = ids["grid/3e+16/r20"]
+    return {k: v for k, v in ids.items() if k.startswith("dyn/")}
+
+
+def plot_dynamics(results_dir, out_dir) -> list[Path]:
+    """Regenerate every dynamics figure from the committed results and curves."""
+    from analysis.common import load_curve, load_diag
+
+    ids = dyn_run_ids(results_dir)
+    out = []
+    for fname, title, names in _DYN_FIGS:
+        curves = {n.removeprefix("dyn/"): load_curve(results_dir, ids[n]) for n in names if n in ids}
+        if curves:
+            out.append(plot_curves(curves, title, Path(out_dir, fname), ylim=(3, 9)))
+    for n in _DYN_LAYER_RUNS:
+        if n in ids:
+            rows = load_diag(results_dir, ids[n])
+            if rows:
+                suffix = n.removeprefix("dyn/")
+                out.append(plot_layer_diagnostics(rows, n, Path(out_dir, f"dyn_instability_layers_{suffix}.png")))
+    return out
+
+
 def main(results_dir="results", out_dir="figures") -> None:
+    root = Path(results_dir).resolve().parent
     fits = Path(results_dir, "fits", "isoflop.json")
     if fits.exists():
         iso = json.loads(fits.read_text())
         optima, exps = iso["optima"], iso["exponents"]
-        pred_path, outcome_path = Path("predictions/3e17.json"), Path("predictions/3e17_outcome.json")
+        pred_path, outcome_path = root / "predictions/3e17.json", root / "predictions/3e17_outcome.json"
         pred = json.loads(pred_path.read_text()) if pred_path.exists() else None
         outcome = json.loads(outcome_path.read_text()) if outcome_path.exists() else None
         p_n = (pred["budget"], pred["isoflop"]["n_opt"]) if pred else None
@@ -157,9 +199,11 @@ def main(results_dir="results", out_dir="figures") -> None:
         plot_optima(optima, exps, Path(out_dir, "optima.png"), predicted=p_n, actual=a_n)
         plot_frontier(optima, Path(out_dir, "frontier.png"), predicted=p_l, actual=a_l)
         plot_tokens_per_param(optima, Path(out_dir, "tokens_per_param.png"))
-    rule = Path("lr_rule.json")
+    rule = root / "lr_rule.json"
     if rule.exists():
         plot_lr_sweep(json.loads(rule.read_text())["groups"], Path(out_dir, "lr_sweep.png"))
+    if dyn_run_ids(results_dir):
+        plot_dynamics(results_dir, out_dir)
     print(f"figures written to {out_dir}/")
 
 

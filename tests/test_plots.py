@@ -35,3 +35,27 @@ def test_plot_layer_diagnostics(tmp_path):
             for s in range(0, 60, 20)]
     p = plots.plot_layer_diagnostics(rows, "diag", tmp_path / "layers.png")
     assert p.exists() and p.stat().st_size > 1000
+
+
+def test_plot_dynamics_writes_files(tmp_path):
+    import json
+
+    res = tmp_path / "results"
+    (res / "curves").mkdir(parents=True)
+    names = ["grid/3e+16/r20", "dyn/lr3x", "dyn/lr3x-noclip", "dyn/lr10x", "dyn/lr10x-noclip", "dyn/lr10x-noclip+qknorm",
+             "dyn/lr10x-noclip+zloss", "dyn/warmup0", "dyn/warmup1", "dyn/beta2-0.999", "dyn/batch32k", "dyn/batch128k",
+             "dyn/batch256k", "dyn/batch512k"]
+    for i, n in enumerate(names):
+        rid = f"run{i:02d}"
+        (res / f"{rid}.json").write_text(json.dumps({"run_id": rid, "name": n}))
+        rows = [{"step": s, "loss": 6 - s / 50 + i * 0.01, "grad_norm": 1.0 + i} for s in range(100)]
+        (res / "curves" / f"{rid}.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+        diag = [{"step": s, **{f"grad_norm/layer_{k}": 1.0 + k for k in range(2)},
+                 **{f"attn_max_logit/layer_{k}": 3.0 * k for k in range(2)}} for s in range(0, 100, 20)]
+        (res / "curves" / f"{rid}.diag.jsonl").write_text("\n".join(json.dumps(r) for r in diag))
+    paths = plots.plot_dynamics(res, tmp_path / "figs")
+    got = {p.name for p in paths}
+    assert {"dyn_instability.png", "dyn_warmup.png", "dyn_beta2.png", "dyn_batch.png",
+            "dyn_instability_layers_lr10x-noclip.png", "dyn_instability_layers_lr10x-noclip+qknorm.png",
+            "dyn_instability_layers_lr10x-noclip+zloss.png", "dyn_instability_layers_lr3x.png"} == got
+    assert all(p.exists() and p.stat().st_size > 1000 for p in paths)
