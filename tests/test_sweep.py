@@ -163,3 +163,13 @@ def test_skip_set():
     assert skip == {"a", "b"} and len(warns) == 1
     skip, warns = sweep.skip_set({"c"}, remote, ["c"])  # locally done wins over a stale remote state
     assert "c" in skip and not warns
+
+
+def test_probe_configs_match_grid_v2_3e15_r20_except_tag():
+    rule = RULE
+    probe = [c for c in sweep.probe_configs(rule) if c.seed == 0][0]
+    grid = [c for c in sweep.grid_configs(rule) if c.name == "grid/3e+15/r20" and c.seed == 0][0]
+    assert probe.batch_tokens == 16384 and probe.micro_batch == 32
+    assert (probe.total_steps, probe.n_layer, probe.d_model, probe.peak_lr) == (
+        grid.total_steps, grid.n_layer, grid.d_model, grid.peak_lr)
+    assert probe.tag == "probe" and run_id(probe) != run_id(grid)

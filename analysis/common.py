@@ -37,7 +37,9 @@ def load_diag(results_dir, run_id: str) -> list[dict]:
 
 
 def grid_run_ids(version: str = "v2", lr_rule: str = "lr_rule.json") -> set[str]:
-    """Run ids of the grid as defined by code (sweep.py), so analysis does not depend on the `phase` label alone."""
+    """Run ids of the grid as defined by code (sweep.py), so analysis does not depend on the `phase` label alone.
+
+    Grid ids depend on the current `lr_rule.json` and the sweep code, so refitting the rule changes them."""
     import sweep
     from gptlab.train import run_id
 

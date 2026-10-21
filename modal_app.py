@@ -232,7 +232,7 @@ def train_long(cfg_dict: dict, preempt_at_step: int | None = None, git_commit: s
 
 def _git_commit() -> str:
     sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-    dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout.strip()
+    dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, check=True).stdout.strip()
     return sha + ("-dirty" if dirty else "")
 
 
