@@ -46,7 +46,7 @@ The model ([gptlab/model.py](gptlab/model.py)) is a Llama-style decoder: RoPE, R
 
 **Grid.** 4 compute budgets (3e15, 1e16, 3e16 and 1e17 FLOPs) × 5 tokens-per-parameter ratios (5, 10, 20, 40 and 80). For each cell, N ≈ √(C / 6r) is snapped to a shape with d_model/n_layer near 32, and then D = C / 6N is rounded to whole batches. The 3e15 budget also has a second seed with a disjoint data offset, which gives a seed-noise estimate. The batch size is set per budget: 16k tokens at 3e15, 32k at 1e16 and 3e16, and 64k at 1e17. That choice came out of a failure, described under [What didn't work](#what-didnt-work).
 
-**LR rule.** An LR sweep at three (budget, ratio) points ([lr_rule.json](lr_rule.json)) fitted `ln lr = 8.090 - 0.8285 ln N`, that is, lr ∝ N^-0.83. The third point is held out as a check: the rule's LR there is within a ratio of 0.91 of the sweep's best. Every grid and test run takes its LR from this rule.
+**LR rule.** An LR sweep at three (budget, ratio) points ([lr_rule.json](lr_rule.json)) fitted `ln lr = 8.090 - 0.8285 ln N`, that is, lr ∝ N^-0.83. The third point is held out as a check: the rule's LR is 0.91× the sweep's best. Every grid and test run takes its LR from this rule.
 
 ![LR sweep](figures/lr_sweep.png)
 
@@ -54,7 +54,7 @@ The model ([gptlab/model.py](gptlab/model.py)) is a Llama-style decoder: RoPE, R
 
 **Compute accounting.** C = 6ND, where N is the *total* parameter count, embeddings included (tied, so counted once) ([gptlab/flops.py](gptlab/flops.py)). Attention FLOPs (the QKᵀ and AV terms) are omitted. At seq_len 512 they are a small but nonzero share of compute, larger for the smallest models.
 
-**Run identity and resume.** A run's ID is a SHA-256 of its behaviour-relevant config ([L63-L65](gptlab/train.py#L63-L65)). A run whose `result.json` exists is never retrained, and runs shared between phases (for example the 3e16/r20 baseline) are reused rather than repeated. Modal containers can be preempted. On restart, a run resumes from its last atomic checkpoint, including the RNG state and data position. [tests/test_train.py](tests/test_train.py) proves that resume is exact on CPU in fp32. On Modal, a smoke run was preempted at step 100 of 200, resumed through a Modal retry, and logged every step exactly once.
+**Run identity and resume.** A run's ID is a SHA-256 of its behaviour-relevant config ([L63-L65](gptlab/train.py#L63-L65)). A run whose `result.json` exists is never retrained, and runs shared between phases (for example the 3e16/r20 baseline) are reused rather than repeated. Modal containers can be preempted. On restart, a run resumes from its last atomic checkpoint, including the RNG state and data position. [tests/test_train.py](tests/test_train.py) checks that resume is exact on CPU in fp32. On Modal, a smoke run was preempted at step 100 of 200, resumed through a Modal retry, and logged every step exactly once. Each result's `git_commit` ends in `-dirty` when untracked or uncommitted local files existed at launch time; runs remain traceable by config and run_id.
 
 ## Scaling results
 
@@ -100,7 +100,7 @@ The two methods bracket the result. The parametric fit's floor (E ≈ 2.7) makes
 
 These runs all use a 16M-parameter model at 3e16 FLOPs with the rule LR of 3.52e-3. The baseline (64k batch, 5% warmup, β₂ = 0.95) ends at 3.445.
 
-**Instability is attention-logit growth, and it never shows up as NaN.** At 3x the LR, the run ends at 4.24 with clipping and 4.46 without. At 10x, it ends at 5.38 with clipping and 6.10 without. None of these runs went NaN. Per-layer diagnostics, logged every 20 steps, show the mechanism. The attention max-logit grows from ~0.7 at init to 1e3-1.4e4 at 3x and 2e4-3e5 at 10x, and it is worst in the last layers. The softmax saturates and attention becomes one-hot. Middle-layer gradient norms collapse to ~0.01 while layer 0 spikes, and the loss stalls near 6.6 until the LR decays. This is the failure mode described by Dehghani et al. (2023) and Wortsman et al. (2023). A NaN guard alone would never have caught it. Clipping narrows the gap but does not stop the logit growth.
+**Instability is attention-logit growth, and it never shows up as NaN.** At 3x the LR, the run ends at 4.24 with clipping and 4.46 without. At 10x, it ends at 5.38 with clipping and 6.10 without. None of these runs went NaN. Per-layer diagnostics, logged every 20 steps, show the mechanism. The attention max-logit grows from ~0.7 at init, peaking at up to ~2e4 (3x) and ~4e5 (10x), and it is worst in the last layers. With QK-norm it stays bounded (final 14-28, peak 36). The softmax saturates and attention becomes one-hot. Middle-layer gradient norms collapse to ~0.01 while layer 0 spikes, and the loss stalls near 6.6 until the LR decays. This is the failure mode described by Dehghani et al. (2023) and Wortsman et al. (2023). A NaN guard alone would never have caught it. Clipping narrows the gap but does not stop the logit growth.
 
 **QK-norm fixes it, z-loss does not.** At 10x LR without clipping:
 
@@ -133,7 +133,7 @@ At this scale, 64k sits near the critical batch size. Halving it gains ~0.01; do
 
 ## What didn't work
 
-**Grid v1 was step-starved at small budgets.** The first grid used a 64k-token batch everywhere. At 3e15, the large-N cells got only 753-1,492 optimizer steps, and the budget looked broken. Seed pairs differed by up to 0.26 nats. The losses did not form a parabola. The 10M-param r5 cell ended at 5.08, barely under the bigram baseline. None of the runs had spikes, and the seed curves separated early and then ran parallel. The final-30% slope dL/d ln(step) was -0.66 to -0.77, against -0.27 to -0.42 elsewhere: these runs were still falling steeply when they ended. My hypothesis was step starvation. I tested it with a **$0.24 probe**: 3e15/r20 rerun at a 16k batch (4x the steps, with the same tokens, LR and FLOPs). With both seeds, it went from 4.531 / 4.275 to 3.897 / 3.898. The bias is systematic: the large-N cells get the fewest steps, which pushes N_opt down at small C and steepens a. Grid v2 uses a batch size per budget ([results/fits/isoflop_v1.json](results/fits/isoflop_v1.json) vs [isoflop.json](results/fits/isoflop.json)):
+**Grid v1 was step-starved at small budgets.** The first grid used a 64k-token batch everywhere. At 3e15, the large-N cells got only 753-1,492 optimizer steps, and the budget looked broken. Seed pairs differed by up to 0.26 nats. The losses did not form a parabola. The 10M-param r5 cell ended at 5.08, barely under the bigram baseline. None of the runs had spikes, and the seed curves separated early and then ran parallel. The final-30% slope dL/d ln(step) was -0.66 to -0.77, against -0.27 to -0.42 elsewhere: these runs were still falling steeply when they ended. My hypothesis was step starvation. I tested it with a **$0.24 probe**: 3e15/r20 rerun at a 16k batch (4x the steps, with the same tokens, LR and FLOPs). With both seeds, it went from 4.531 / 4.275 to 3.897 / 3.898. The bias is systematic: the large-N cells get the fewest steps, which pushes N_opt down at small C and steepens a. The probe's two runs are the same configs as the grid v2 3e15/r20 pair, re-run: they differ only in `tag`, which is hashed into the run_id. Val loss differs by 0.0043 (seed 0) and 0.0034 (seed 1), which is a GPU-nondeterminism floor of about 0.003-0.004, well below the seed noise σ. Grid v2 uses a batch size per budget ([results/fits/isoflop_v1.json](results/fits/isoflop_v1.json) vs [isoflop.json](results/fits/isoflop.json)):
 
 | Budget | v1 N_opt (64k batch) | v2 N_opt (per-budget batch) |
 |---|---|---|
@@ -144,7 +144,7 @@ At this scale, 64k sits near the critical batch size. Halving it gains ~0.01; do
 | **Exponent a** | **0.747** [0.128, 3.120] | **0.545** [0.120, 1.665] |
 | Seed σ | 0.106 | 0.085 |
 
-**LR sweeps hit the edge of the grid, and the gate refused.** In the first LR pass, the 2.6M and 9.3M optima sat on the *upper* edge of their LR grids. `sweep.py fit-lr-rule` refuses to write a rule when any group's optimum is on an edge, and it did. I moved the small-end centre up 4x, which made 1.6e-2 interior (3.2e-2 and 6.4e-2 gave 4.57 and 5.22, against 3.95). For the check point, the earlier runs at 3e-3, 6e-3 and 1.2e-2 already bracketed the optimum, so recentring there cost nothing. The sweep also showed how close the cliff is: 9.3M goes from 3.656 at 6e-3 to 4.391 at 1.2e-2.
+**LR sweeps hit the edge of the grid, and the gate refused.** In the first LR pass, the 2.6M and 9.3M optima sat on the *upper* edge of their LR grids. `sweep.py fit-lr-rule` refuses to write a rule when any group's optimum is on an edge, and it did. I moved the small-end centre up 4x, which made 1.6e-2 interior (3.2e-2 and 6.4e-2 gave 4.57 and 5.22, against 3.95). For the check point, I first shifted the centre 4x to 1.2e-2 (two new runs, at 1.2e-2 and 2.4e-2), which left the optimum at 6e-3 on the *lower* edge of the new grid. The earlier 3e-3 run already bracketed it, so I recentred on 6e-3 (3e-3, 6e-3 and 1.2e-2, all already run). Only that final recentre was free. The sweep also showed how close the cliff is: 9.3M goes from 3.656 at 6e-3 to 4.391 at 1.2e-2.
 
 **The seed-noise estimator is dominated by one pair.** In grid v2, σ = 0.085 nats is mostly the 3e15/r5 pair (4.270 vs 4.019). The other pairs differ by 0.098, 0.0005, 0.016 and 0.004. The r5 gap is not instability (max grad norm 5.8, no attention blow-up). Train-loss bumps of ~0.2 appear at identical steps in runs that read the same data region, so they look data-driven. I kept the pre-registered estimator (RMS over all pairs) rather than switching to a robust one after seeing the data. The isoflop intervals on a are therefore wide, and probably pessimistic at the larger budgets.
 
@@ -219,13 +219,14 @@ uv run python -m analysis.isoflop results            # add --grid v1 for the fai
 
 # Phase 5: fit, predict, commit and tag before the test run
 uv run python -m analysis.isoflop results && uv run python -m analysis.parametric results
-uv run python -m analysis.predict make --results results --lr-rule lr_rule.json --out predictions/3e17.json
-git add predictions/3e17.json && git commit -m "prediction" && git tag -a prediction-3e17 -m "Prediction committed before the 3e17 run"
+uv run python -m analysis.predict make --results results --lr-rule lr_rule.json --out predictions/3e17_repro.json
+git add predictions/3e17_repro.json && git commit -m "prediction" && git tag -a prediction-3e17-repro -m "Prediction committed before the 3e17 run"
+# (the original predictions/3e17.json and tag prediction-3e17 already exist in the repo, hence the _repro names)
 
 # Phase 6: test run and comparison
 uv run modal run --detach modal_app.py::launch --phase test --yes
 uv run modal run modal_app.py::pull_results
-uv run python -m analysis.predict compare --prediction predictions/3e17.json --results results
+uv run python -m analysis.predict compare --prediction predictions/3e17_repro.json --results results
 uv run python -m analysis.plots results figures
 uv run python -m analysis.costs results
 
@@ -246,3 +247,7 @@ The step-starvation probe was a diagnostic added mid-project. To reproduce grid 
   - A WSD (warmup-stable-decay) schedule, so that one run yields many budgets.
   - μP, so the LR transfers across width without a fitted rule.
   - More budgets above 1e17 and more seeds per cell, to tighten a.
+
+## License
+
+The code is under Apache-2.0 ([LICENSE](LICENSE)). The model on the Hugging Face Hub is also under Apache-2.0. The training data is [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) from HuggingFaceFW, released under ODC-By.

@@ -6,3 +6,4 @@ wandb/
 *.bin
 *.pt
 /export/
+.superpowers/
